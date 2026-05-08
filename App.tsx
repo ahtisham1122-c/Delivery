@@ -62,6 +62,7 @@ import IntegrityStatusBadge from './components/IntegrityStatusBadge';
 import FinancialSummary from './components/FinancialSummary';
 import WholesaleHub from './components/wholesale/WholesaleHub';
 import LiveReconcile from './components/LiveReconcile';
+import RiderFilterBar from './components/RiderFilterBar';
 
 
 let storageWarningShownThisSession = false;
@@ -118,6 +119,40 @@ const App: React.FC = () => {
   const [archives, setArchives] = useState<MonthlyArchive[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [closingRecords, setClosingRecords] = useState<RiderClosingRecord[]>([]);
+
+  // Phase 4 (2026-05-09): authoritative balances pulled from the
+  // dp_customer_balances Postgres view. Replaces the previous
+  // device-side aggregation, which drifted whenever the device's
+  // last-N-weeks fetch window missed any active record (e.g. an old
+  // un-archived month, a partial Close Month, or a realtime gap during
+  // offline rider sessions). The server view sums ALL active rows in
+  // the database and is identical on every device by construction.
+  // We keep the client computation only as a fallback for customers
+  // not yet present in the fetched server map (cold start / offline).
+  const [serverBalances, setServerBalances] = useState<Record<string, number>>({});
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshServerBalances = useCallback(async () => {
+    if (!isCloudConnected()) return;
+    try {
+      const fresh = await relationalDataService.fetchBalancesFromServer();
+      // Only commit if we got a non-empty result; an empty response
+      // usually means the request was rejected (RLS / network blip)
+      // and we don't want to flash stale-empty over good data.
+      if (fresh && Object.keys(fresh).length > 0) {
+        setServerBalances(fresh);
+      }
+    } catch (err) {
+      console.warn('refreshServerBalances failed:', err);
+    }
+  }, []);
+
+  const scheduleBalanceRefresh = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshServerBalances();
+    }, 600);
+  }, [refreshServerBalances]);
   
   const parseDateParts = (dateStr: string) => {
     const parts = (dateStr || '').substring(0, 10).split('-');
@@ -163,40 +198,38 @@ const App: React.FC = () => {
     }
   }, [activeTab, currentUser]);
 
+  // Phase 4: balances now come from the server view (dp_customer_balances)
+  // by default. Client computation is retained ONLY as a fallback for
+  // customers the server fetch hasn't covered yet (e.g. cold start,
+  // offline-first rider session, or right after creating a brand-new
+  // customer before the next debounced refresh fires).
   const balances = useMemo(() => {
-    const localBalances: Record<string, number> = {};
+    const result: Record<string, number> = {};
     customers.forEach(c => {
-      // Ensure openingBalance is a number and handled precisely
+      const serverVal = serverBalances[c.id];
+      if (serverVal !== undefined && serverVal !== null) {
+        result[c.id] = Math.round(Number(serverVal) * 100) / 100;
+        return;
+      }
+      // Fallback: client-side aggregation (drift-prone — only used
+      // when the server hasn't yet returned a value for this customer)
       const startBal = Number(c.openingBalance) || 0;
-
-      // Filter active records for this customer
       const customerDeliveries = (deliveries || [])
         .filter(d => d.customerId === c.id && !d.deleted);
-      
       const customerPayments = (payments || [])
         .filter(p => p.customerId === c.id && !p.deleted);
-      
-      // Strict de-duplication at calculation time to prevent ghost amounts
       const uniqueDeliveries = Array.from(new Map(customerDeliveries.map(d => [d.id, d])).values());
       const uniquePayments = Array.from(new Map(customerPayments.map(p => [p.id, p])).values());
-      
-      const totalD = uniqueDeliveries
-        .reduce((sum, d) => {
-          const val = Number(d.totalAmount);
-          return sum + (isNaN(val) ? 0 : val);
-        }, 0);
-        
-      const totalP = uniquePayments
-        .reduce((sum, p) => {
-          const val = Number(p.amount);
-          return sum + (isNaN(val) ? 0 : val);
-        }, 0);
-      
-      // Result is rounded to 2 decimal places to avoid floating point drift
-      localBalances[c.id] = Math.round((startBal + totalD - totalP) * 100) / 100;
+      const totalD = uniqueDeliveries.reduce((s, d) => {
+        const v = Number(d.totalAmount); return s + (isNaN(v) ? 0 : v);
+      }, 0);
+      const totalP = uniquePayments.reduce((s, p) => {
+        const v = Number(p.amount); return s + (isNaN(v) ? 0 : v);
+      }, 0);
+      result[c.id] = Math.round((startBal + totalD - totalP) * 100) / 100;
     });
-    return localBalances;
-  }, [customers, deliveries, payments]);
+    return result;
+  }, [customers, deliveries, payments, serverBalances]);
 
   const fetchCloudData = useCallback(async () => {
     if (!isCloudConnected()) return;
@@ -229,6 +262,15 @@ const App: React.FC = () => {
       setClosingRecords(sanitize(p.closingRecords));
       setArchives(sanitize(p.archives));
       setAuditLogs(sanitize(p.auditLogs));
+
+      // Phase 4: authoritative balances from dp_customer_balances view.
+      // We do NOT block the rest of the fetch on this; it's tiny and fast.
+      try {
+        const fresh = await relationalDataService.fetchBalancesFromServer();
+        if (fresh && Object.keys(fresh).length > 0) setServerBalances(fresh);
+      } catch (err) {
+        console.warn('Initial server balance fetch failed:', err);
+      }
 
       saveToStore('customers', sanitize(p.customers));
       saveToStore('riders', sanitize(p.riders));
@@ -537,7 +579,14 @@ const App: React.FC = () => {
           });
           break;
       }
-      
+
+      // Phase 4: ledger-affecting tables -> debounced refresh of the
+      // authoritative server balances. Within ~600ms the device
+      // displays the same number the database does.
+      if (['dp_deliveries', 'dp_payments', 'dp_customers'].includes(table)) {
+        scheduleBalanceRefresh();
+      }
+
       setSyncing(false, new Date().toLocaleTimeString());
       setIntegrityStatus('verified');
     };
@@ -574,7 +623,16 @@ const App: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUser, setSyncing]);
+  }, [currentUser, setSyncing, scheduleBalanceRefresh]);
+
+  // Phase 4: when local arrays change (the user just saved a delivery
+  // or payment from this device), the realtime echo will repopulate
+  // the server balance — but for snappier UX we also schedule a
+  // refresh right away. The debounce coalesces bursts.
+  useEffect(() => {
+    if (!currentUser) return;
+    scheduleBalanceRefresh();
+  }, [deliveries.length, payments.length, customers.length, currentUser, scheduleBalanceRefresh]);
 
   useEffect(() => {
     const cleanLegacyStorage = () => {
@@ -687,7 +745,7 @@ const App: React.FC = () => {
         >
           {(() => {
             switch (activeTab) {
-              case 'dashboard': return <Dashboard customers={customers} deliveries={deliveries} payments={payments} expenses={expenses} riders={riders} lockedMonths={[]} onCloseMonth={onCloseMonth} role={currentUser.role} closingRecords={closingRecords} balances={balances} riderFilterId={globalFilterRiderId} setActiveTab={setActiveTab} />;
+              case 'dashboard': return <Dashboard customers={customers} deliveries={deliveries} payments={payments} expenses={expenses} riders={riders} lockedMonths={[]} onCloseMonth={onCloseMonth} role={currentUser.role} closingRecords={closingRecords} balances={balances} riderFilterId={globalFilterRiderId} setActiveTab={setActiveTab} onSelectRider={setGlobalFilterRiderId} />;
               case 'intelligence': return <SessionIntelligence riders={riders} customers={customers} deliveries={deliveries} payments={payments} riderLoads={riderLoads} role={currentUser.role} />;
               case 'milk': return <DeliveryEntry customers={customers} deliveries={deliveries} setDeliveries={handleSetDeliveries} prices={prices} riders={riders} payments={payments} setPayments={handleSetPayments} archives={archives} riderId={effectiveRiderId} role={currentUser.role} balances={balances} onOpenCalc={openCalculatorWithCustomer} riderLoads={riderLoads} setAuditLogs={setAuditLogs} />;
               case 'billing': return <BillingTracker customers={customers} payments={payments} setPayments={handleSetPayments} balances={balances} role={currentUser.role} riders={riders} riderFilterId={globalFilterRiderId} archives={archives} deliveries={deliveries} prices={prices} />;
@@ -772,6 +830,14 @@ const App: React.FC = () => {
         </motion.button>
       </header>
       
+      <RiderFilterBar
+        riders={riders}
+        customers={customers}
+        role={currentUser.role}
+        value={globalFilterRiderId}
+        onChange={setGlobalFilterRiderId}
+      />
+
       {integrityStatus === 'warning' && currentUser.role === UserRole.OWNER && (
         <div className="bg-red-600 text-white px-4 py-3 text-xs font-bold flex flex-col gap-1 items-center justify-center text-center z-50">
           <span>CRITICAL STORAGE WARNING: Device storage is almost full.</span>

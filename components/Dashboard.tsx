@@ -13,9 +13,10 @@ import { calculateCycleBreakdown } from '../services/ledgerUtils';
 import { printService } from '../services/printService';
 import { exportService } from '../services/exportService';
 import { SummaryReceipt } from './Receipts';
-import { 
+import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
+import RiderPerformanceGrid from './RiderPerformanceGrid';
 
 interface DashboardProps {
   customers: Customer[];
@@ -30,10 +31,13 @@ interface DashboardProps {
   balances: Record<string, number>;
   riderFilterId: string;
   setActiveTab: (tab: string) => void;
+  // Phase 5: optional callback so the Owner Dashboard's per-rider tiles
+  // can switch the global rider filter directly. Owner-only feature.
+  onSelectRider?: (riderId: string) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ 
-  customers, deliveries, payments, expenses, riders, role, balances, riderFilterId, setActiveTab
+const Dashboard: React.FC<DashboardProps> = ({
+  customers, deliveries, payments, expenses, riders, role, balances, riderFilterId, setActiveTab, onSelectRider
 }) => {
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [selectedRiderForInvite, setSelectedRiderForInvite] = useState<Rider | null>(null);
@@ -357,8 +361,22 @@ const Dashboard: React.FC<DashboardProps> = ({
         </motion.button>
       </div>
 
+      {/* Phase 5: per-rider scoreboard. Visible only when Owner is on
+          the all-riders view; tapping a rider tile switches the global
+          filter so every other screen drills in to that rider. */}
+      {isOwner && riderFilterId === 'all' && onSelectRider && (
+        <RiderPerformanceGrid
+          riders={riders}
+          customers={customers}
+          deliveries={deliveries}
+          payments={payments}
+          balances={balances}
+          onSelectRider={onSelectRider}
+        />
+      )}
+
       {isOwner && riderFilterId === 'all' && (
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           className="bg-slate-900 p-6 md:p-8 rounded-[3rem] shadow-2xl relative overflow-hidden"
