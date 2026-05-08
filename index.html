@@ -1,0 +1,148 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#2563eb" />
+    <title>Gujjar Milk Shop</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #f8fafc;
+        -webkit-tap-highlight-color: transparent;
+        overscroll-behavior-y: contain;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      .safe-top {
+        padding-top: env(safe-area-inset-top);
+      }
+      .safe-bottom {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      
+      /* iOS-like bottom sheet handle */
+      .sheet-handle {
+        width: 36px;
+        height: 5px;
+        background-color: #e2e8f0;
+        border-radius: 999px;
+        margin: 12px auto;
+      }
+
+      /* Custom scrollbar for a cleaner look */
+      .scrollbar-hide::-webkit-scrollbar {
+        display: none;
+      }
+      .scrollbar-hide {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+
+      @media print {
+        /* Hide everything except the print root */
+        body > *:not(#print-root) {
+          display: none !important;
+        }
+
+        #print-root {
+          display: block !important;
+          position: relative !important;
+          width: 100% !important;
+          background-color: white !important;
+          color: black !important;
+          margin: 0 !important;
+          padding: 0 !important;
+          height: auto !important;
+          overflow: visible !important;
+          visibility: visible !important;
+        }
+
+        #print-root * {
+          visibility: visible !important;
+        }
+
+        /* Remove page headers/footers */
+        @page {
+          size: auto;
+          margin: 0;
+        }
+
+        /* Force continuous vertical flow */
+        html, body {
+          height: auto !important;
+          overflow: visible !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+
+        /* Prevent page breaks inside sections */
+        #print-root > div, 
+        #print-root table, 
+        #print-root tr {
+          page-break-inside: avoid;
+          break-inside: avoid;
+        }
+
+        /* Thermal Widths */
+        .thermal-58 {
+          width: 58mm !important;
+          max-width: 58mm !important;
+        }
+        .thermal-80 {
+          width: 80mm !important;
+          max-width: 80mm !important;
+        }
+        .thermal-A4 {
+          width: 210mm !important;
+        }
+
+        /* Monospace font for alignment */
+        .font-mono {
+          font-family: 'Courier New', Courier, monospace !important;
+        }
+
+        /* Ensure table alignment */
+        table {
+          width: 100% !important;
+          border-collapse: collapse !important;
+        }
+        th, td {
+          padding: 2px 0 !important;
+        }
+        .text-right {
+          text-align: right !important;
+        }
+        .border-dashed-print {
+          border-top: 1px dashed #000 !important;
+          margin: 8px 0 !important;
+          width: 100% !important;
+        }
+      }
+
+      #print-root {
+        display: none;
+      }
+      
+      .no-print {
+        display: block;
+      }
+      @media print {
+        .no-print {
+          display: none !important;
+        }
+      }
+    </style>
+</head>
+  <body>
+    <div id="root"></div>
+    <div id="print-root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
