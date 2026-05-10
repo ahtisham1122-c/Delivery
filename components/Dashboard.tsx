@@ -3,11 +3,11 @@ import React, { useMemo, useState } from 'react';
 import { 
   TrendingUp, Droplets, AlertCircle, Wallet, PieChart, 
   CheckCircle, Database, ShieldCheck,
-  QrCode, X, Copy, Check, Trophy, Star, MessageSquare, Lock,
+  QrCode, X, Copy, Check, Trophy, Star, MessageSquare,
   Printer, BarChart3, ClipboardList, History, ArrowRight
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { Customer, Delivery, Payment, Expense, Rider, MonthLock, UserRole, RiderClosingRecord, PaymentCycle } from '../types';
+import { Customer, Delivery, Payment, Expense, Rider, UserRole, RiderClosingRecord, PaymentCycle } from '../types';
 import { formatPKR } from '../services/dataStore';
 import { calculateCycleBreakdown } from '../services/ledgerUtils';
 import { printService } from '../services/printService';
@@ -24,8 +24,6 @@ interface DashboardProps {
   payments: Payment[];
   expenses: Expense[];
   riders: Rider[];
-  lockedMonths: MonthLock[];
-  onCloseMonth: (year: number, month: number) => void;
   role: UserRole;
   closingRecords: RiderClosingRecord[];
   balances: Record<string, number>;
@@ -127,7 +125,7 @@ const Dashboard: React.FC<DashboardProps> = ({
         : (customers || []).filter(c => c.riderId === riderFilterId);
 
       targetCustomers.forEach(customer => {
-        const breakdown = calculateCycleBreakdown(customer, deliveries, payments);
+        const breakdown = calculateCycleBreakdown(customer, deliveries, payments, balances[customer.id] || 0);
         breakdown.forEach(item => {
           const key = `${customer.paymentCycle}-${item.cycleName}`;
           if (!aggregated[key]) {
@@ -615,16 +613,6 @@ const Dashboard: React.FC<DashboardProps> = ({
                    <span className="text-3xl font-black text-blue-600 italic">Rs. {formatPKR((monthlyStats.sales ?? 0) - (monthlyStats.salaries ?? 0) - (monthlyStats.exp ?? 0))}</span>
                 </div>
              </div>
-             {riderFilterId === 'all' && (
-               <div className="mt-8 pt-8 border-t border-slate-100 flex flex-col items-center">
-                 <button 
-                  onClick={() => onCloseMonth(currentYear, currentMonth)}
-                  className="flex items-center gap-2 text-[10px] font-black uppercase text-amber-600 bg-amber-50 px-6 py-3 rounded-xl border border-amber-100 hover:bg-amber-100 transition-all"
-                 >
-                   <Lock size={14}/> Close Month Period
-                 </button>
-               </div>
-             )}
           </div>
           
           <div className="bg-white p-8 md:p-10 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col">

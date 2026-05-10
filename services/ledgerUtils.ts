@@ -79,7 +79,9 @@ export const getCycleBoundaries = (date: Date, cycleType: PaymentCycle): { start
 export const calculateCycleBreakdown = (
   customer: Customer,
   deliveries: Delivery[],
-  payments: Payment[]
+  payments: Payment[],
+  authoritativeBalance?: number,
+  referenceDate: Date = new Date()
 ): CycleBreakdown[] => {
   const customerDeliveries = deliveries
     .filter(d => d.customerId === customer.id && !d.deleted)
@@ -147,8 +149,7 @@ export const calculateCycleBreakdown = (
   // If there's still available credit left (Advance Payment), 
   // we show it as a negative outstanding in the current/latest cycle.
   if (availableCredit > 0) {
-    const now = new Date();
-    const { start, end, name } = getCycleBoundaries(now, customer.paymentCycle);
+    const { start, end, name } = getCycleBoundaries(referenceDate, customer.paymentCycle);
     const existing = breakdownMap.get(name);
     if (existing) {
       existing.outstanding -= availableCredit;
@@ -168,8 +169,7 @@ export const calculateCycleBreakdown = (
     .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
 
   // Consolidate all past cycles into the immediate previous cycle
-  const now = new Date();
-  const currentCycleInfo = getCycleBoundaries(now, customer.paymentCycle);
+  const currentCycleInfo = getCycleBoundaries(referenceDate, customer.paymentCycle);
   
   const pastBreakdowns = breakdowns.filter(b => b.startDate.getTime() < currentCycleInfo.start.getTime());
   const currentAndFutureBreakdowns = breakdowns.filter(b => b.startDate.getTime() >= currentCycleInfo.start.getTime());
@@ -193,5 +193,41 @@ export const calculateCycleBreakdown = (
     }
   }
 
-  return breakdowns;
+  if (authoritativeBalance === undefined || authoritativeBalance === null) {
+    return breakdowns;
+  }
+
+  const roundedBalance = Math.round(Number(authoritativeBalance) * 100) / 100;
+  if (Math.abs(roundedBalance) <= 0.01) {
+    return [];
+  }
+
+  const breakdownTotal = Math.round(
+    breakdowns.reduce((sum, b) => sum + b.outstanding, 0) * 100
+  ) / 100;
+  const difference = Math.round((roundedBalance - breakdownTotal) * 100) / 100;
+
+  if (Math.abs(difference) <= 0.01) {
+    return breakdowns;
+  }
+
+  if (breakdowns.length === 0) {
+    const { start, end, name } = getCycleBoundaries(referenceDate, customer.paymentCycle);
+    return [{
+      cycleName: name,
+      startDate: start,
+      endDate: end,
+      outstanding: roundedBalance
+    }];
+  }
+
+  const adjusted = [...breakdowns];
+  const sameDirectionIndex = adjusted.findIndex(b => Math.sign(b.outstanding) === Math.sign(roundedBalance));
+  const targetIndex = sameDirectionIndex >= 0 ? sameDirectionIndex : 0;
+  adjusted[targetIndex] = {
+    ...adjusted[targetIndex],
+    outstanding: Math.round((adjusted[targetIndex].outstanding + difference) * 100) / 100
+  };
+
+  return adjusted.filter(b => Math.abs(b.outstanding) > 0.01);
 };

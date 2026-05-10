@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { PriceRecord, Customer, Delivery } from '../types';
 import { generateId } from '../services/dataStore';
 import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
 
 interface PriceManagementProps {
   prices: PriceRecord[];
@@ -63,7 +64,7 @@ const PriceManagement: React.FC<PriceManagementProps> = ({ prices, setPrices, cu
     
     let isCloudSuccess = false;
     try {
-      const { error: pErr } = await supabase.from('dp_prices').upsert(newPrice);
+      const { error: pErr } = await supabase.from('dp_prices').upsert(relationalDataService.toSnakeCase(newPrice));
       if (pErr) throw pErr;
       isCloudSuccess = true;
     } catch (err) {

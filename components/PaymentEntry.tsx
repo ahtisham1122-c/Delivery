@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Customer, Payment, PaymentMode, MonthLock } from '../types';
 import { generateId } from '../services/dataStore';
 import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
 
 interface PaymentEntryProps {
   customers: Customer[];
@@ -94,37 +95,44 @@ const PaymentEntry: React.FC<PaymentEntryProps> = ({ customers, payments, setPay
     setIsProcessing(true);
     setSyncStatus('saving');
 
-    // Fixed: Added missing 'version' property for BaseEntity
+    const requestId = generateId();
     const newPayment: Payment = {
-      id: generateId(),
+      id: requestId,
       customerId: formData.customerId,
       amount: Math.max(0, amount),
       date: formData.date,
       mode: formData.mode,
       note: formData.note,
+      clientRequestId: requestId,
       updatedAt: new Date().toISOString(),
       version: 1 // Never create records with version 0
     };
 
-    // STEP B: Write to Supabase directly via upsert FIRST
-    let isCloudSuccess = false;
+    let savedPayment: Payment | null = null;
+    let wasDuplicate = false;
     try {
-      const { error: pErr } = await supabase.from('dp_payments').upsert(newPayment);
+      const { data, error: pErr } = await supabase.rpc('save_standalone_payment', {
+        p_payment: relationalDataService.toSnakeCase(newPayment)
+      });
       if (pErr) throw pErr;
-      isCloudSuccess = true;
+      if (!data?.payment) throw new Error('Payment was not confirmed by server.');
+      savedPayment = relationalDataService.toCamelCase(data.payment) as Payment;
+      wasDuplicate = Boolean(data.duplicate);
     } catch (err) {
       console.error("Cloud save failed:", err);
     }
 
-    // STEP C & D
-    if (isCloudSuccess) {
+    if (savedPayment) {
       setSyncStatus('saved');
       
       setPayments(prev => {
-        const alreadyExists = prev.some(p => p.id === newPayment.id);
+        const alreadyExists = prev.some(p => p.id === savedPayment.id);
         if (alreadyExists) return prev;
-        return [newPayment, ...prev];
+        return [savedPayment, ...prev];
       });
+      if (wasDuplicate) {
+        alert("Duplicate payment blocked: the existing server record was used.");
+      }
     } else {
       setSyncStatus('idle');
       alert("PAYMENT SYNC FAILED: Record not confirmed on server. Please check internet.");

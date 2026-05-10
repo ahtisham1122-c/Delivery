@@ -129,6 +129,10 @@
       #print-root {
         display: none;
       }
+
+      .print-only {
+        display: none !important;
+      }
       
       .no-print {
         display: block;
@@ -136,6 +140,31 @@
       @media print {
         .no-print {
           display: none !important;
+        }
+
+        body:has(.print-only) > *:not(#root):not(#print-root) {
+          display: none !important;
+        }
+
+        body:has(.print-only) #root {
+          display: block !important;
+        }
+
+        body:has(.print-only) #root * {
+          visibility: hidden !important;
+        }
+
+        body:has(.print-only) #root .print-only,
+        body:has(.print-only) #root .print-only * {
+          visibility: visible !important;
+        }
+
+        body:has(.print-only) #root .print-only {
+          display: block !important;
+          position: absolute !important;
+          inset: 0 auto auto 0 !important;
+          width: 100% !important;
+          background: white !important;
         }
       }
     </style>

@@ -75,6 +75,7 @@ export interface Payment extends BaseEntity {
   amount: number;
   mode: PaymentMode;
   note?: string;
+  clientRequestId?: string;
   isAdjustment?: boolean;
   adjustmentNote?: string;
   adjustmentTag?: string;

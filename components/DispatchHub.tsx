@@ -6,6 +6,7 @@ import { RiderLoad, Rider, UserRole, MonthlyArchive } from '../types';
 import { generateId } from '../services/dataStore';
 import { printService } from '../services/printService';
 import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
 import ThermalPrintView from './ThermalPrintView';
 
 interface DispatchHubProps {
@@ -99,7 +100,7 @@ const DispatchHub: React.FC<DispatchHubProps> = ({ riderLoads, setRiderLoads, ri
 
     let isCloudSuccess = false;
     try {
-      const { error: lErr } = await supabase.from('dp_rider_loads').upsert(newLoad);
+      const { error: lErr } = await supabase.from('dp_rider_loads').upsert(relationalDataService.toSnakeCase(newLoad));
       if (lErr) throw lErr;
       isCloudSuccess = true;
     } catch (err) {

@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Expense, Rider, UserRole } from '../types';
 import { generateId } from '../services/dataStore';
 import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
 
 interface PetrolLogProps {
   expenses: Expense[];
@@ -64,12 +65,12 @@ const PetrolLog: React.FC<PetrolLogProps> = ({ expenses, setExpenses, riders, ro
       type: 'Petrol',
       note: formData.note,
       updatedAt: new Date().toISOString(),
-      version: 0
+      version: 1
     };
 
     let isCloudSuccess = false;
     try {
-      const { error: eErr } = await supabase.from('dp_expenses').upsert(newExpense);
+      const { error: eErr } = await supabase.from('dp_expenses').upsert(relationalDataService.toSnakeCase(newExpense));
       if (eErr) throw eErr;
       isCloudSuccess = true;
     } catch (err) {

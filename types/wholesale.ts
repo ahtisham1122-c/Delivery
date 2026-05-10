@@ -10,6 +10,8 @@ export interface WSCustomer {
   notes?: string;
   created_at?: string;
   updated_at?: string;
+  deleted?: boolean;
+  version?: number;
 }
 
 export interface WSProduct {
@@ -19,6 +21,8 @@ export interface WSProduct {
   default_rate: number;
   active: boolean;
   updated_at?: string;
+  deleted?: boolean;
+  version?: number;
 }
 
 export interface WSDelivery {
@@ -35,6 +39,8 @@ export interface WSDelivery {
   linked_delivery_id?: string;
   created_at?: string;
   updated_at?: string;
+  deleted?: boolean;
+  version?: number;
 }
 
 export interface WSPayment {
@@ -44,8 +50,11 @@ export interface WSPayment {
   amount: number;
   mode?: string;
   note?: string;
+  client_request_id?: string;
   created_at?: string;
   updated_at?: string;
+  deleted?: boolean;
+  version?: number;
 }
 
 export interface WSLedgerEntry {

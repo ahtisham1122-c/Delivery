@@ -103,15 +103,25 @@ const DeliveryRow = React.memo(({
   const [localCash, setLocalCash] = useState(cashInputsRef.current[customer.id] !== undefined ? cashInputsRef.current[customer.id] : ((dayPayments.find(p=>!p.isAdjustment)?.amount.toString()) || ''));
 
   useEffect(() => {
-    if (localMilk !== deliveryInputsRef.current[customer.id]) {
-      deliveryInputsRef.current[customer.id] = localMilk;
+    const currentDraft = deliveryInputsRef.current[customer.id] || '';
+    if (localMilk !== currentDraft) {
+      if (localMilk.trim()) {
+        deliveryInputsRef.current[customer.id] = localMilk;
+      } else {
+        delete deliveryInputsRef.current[customer.id];
+      }
       saveDrafts();
     }
   }, [localMilk, customer.id, saveDrafts, deliveryInputsRef]);
 
   useEffect(() => {
-    if (localCash !== cashInputsRef.current[customer.id]) {
-      cashInputsRef.current[customer.id] = localCash;
+    const currentDraft = cashInputsRef.current[customer.id] || '';
+    if (localCash !== currentDraft) {
+      if (localCash.trim()) {
+        cashInputsRef.current[customer.id] = localCash;
+      } else {
+        delete cashInputsRef.current[customer.id];
+      }
       saveDrafts();
     }
   }, [localCash, customer.id, saveDrafts, cashInputsRef]);
@@ -131,7 +141,10 @@ const DeliveryRow = React.memo(({
   const projectedNewBalance = Math.round(totalBalance + draftBill - draftCash);
   const hasActiveDraft = draftLiters > 0 || draftCash > 0;
 
-  const customerBreakdown = useMemo(() => calculateCycleBreakdown(customer, deliveries, payments), [customer, deliveries, payments]);
+  const customerBreakdown = useMemo(
+    () => calculateCycleBreakdown(customer, deliveries, payments, totalBalance, new Date(`${selectedDate}T12:00:00`)),
+    [customer, deliveries, payments, totalBalance, selectedDate]
+  );
 
   const typicalLiters = useMemo(() => {
     const history = deliveries.filter(d => !d.isAdjustment && !d.deleted).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
@@ -215,27 +228,30 @@ const DeliveryRow = React.memo(({
            </div>
         </div>
 
-        {customerBreakdown.length > 0 && (
-          <div className="p-6 bg-slate-900 rounded-[2.5rem] border-4 border-slate-800 shadow-2xl space-y-4 animate-in slide-in-from-bottom-4">
+        <div className="p-6 bg-slate-900 rounded-[2.5rem] border-4 border-slate-800 shadow-2xl space-y-4 animate-in slide-in-from-bottom-4">
              <div className="flex items-center gap-3">
                <div className="bg-blue-600 p-2 rounded-xl">
                  <Database size={16} className="text-white" />
                </div>
                <h3 className="text-[10px] font-black text-white uppercase tracking-widest">Previous Dues Breakdown</h3>
              </div>
-             <div className="grid grid-cols-1 gap-3">
-               {customerBreakdown.map((cycle) => (
-                 <div key={cycle.cycleName} className="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5">
-                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{cycle.cycleName}</span>
-                   <span className={`text-sm font-black italic tracking-tighter ${cycle.outstanding > 0 ? 'text-red-400' : 'text-green-400'}`}>
+              <div className="grid grid-cols-1 gap-3">
+                {customerBreakdown.length > 0 ? customerBreakdown.map((cycle) => (
+                  <div key={cycle.cycleName} className="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">{cycle.cycleName}</span>
+                    <span className={`text-sm font-black italic tracking-tighter ${cycle.outstanding > 0 ? 'text-red-400' : 'text-green-400'}`}>
                      Rs. {formatPKR(Math.abs(cycle.outstanding))}
                      {cycle.outstanding < 0 && <span className="text-[8px] ml-1 not-italic opacity-60">(Adv)</span>}
-                   </span>
-                 </div>
-               ))}
-             </div>
-          </div>
-        )}
+                    </span>
+                  </div>
+                )) : (
+                  <div className="flex justify-between items-center p-4 bg-white/5 rounded-2xl border border-white/5">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter">All Cycles Settled</span>
+                    <span className="text-sm font-black italic tracking-tighter text-green-400">Rs. 0</span>
+                  </div>
+                )}
+              </div>
+           </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
            <div className="space-y-2">
@@ -339,6 +355,11 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
   const [selectedDate, setSelectedDate] = useState(new Date().toLocaleDateString('en-CA'));
   const [searchTerm, setSearchTerm] = useState('');
   const [historyCustomerId, setHistoryCustomerId] = useState<string | null>(null);
+  const [historyExtraDeliveries, setHistoryExtraDeliveries] = useState<Delivery[]>([]);
+  const [historyExtraPayments, setHistoryExtraPayments] = useState<Payment[]>([]);
+  const [historyBeforeDate, setHistoryBeforeDate] = useState(relationalDataService.getEntryHistoryDateLimit());
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [hasOlderHistory, setHasOlderHistory] = useState(true);
   const [adjustmentModalCustomer, setAdjustmentModalCustomer] = useState<Customer | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
@@ -346,6 +367,7 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
   
   const deliveryInputsRef = useRef<Record<string, string>>({});
   const cashInputsRef = useRef<Record<string, string>>({});
+  const [draftRevision, setDraftRevision] = useState(0);
   const [syncStatuses, setSyncStatuses] = useState<Record<string, 'saving' | 'saved' | 'pending'>>({});
   const [draftSavedIndicator, setDraftSavedIndicator] = useState(false);
 
@@ -357,6 +379,14 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0);
 
   const isOwner = role === UserRole.OWNER;
+
+  useEffect(() => {
+    if (!historyCustomerId) return;
+    setHistoryExtraDeliveries([]);
+    setHistoryExtraPayments([]);
+    setHistoryBeforeDate(relationalDataService.getEntryHistoryDateLimit());
+    setHasOlderHistory(true);
+  }, [historyCustomerId]);
 
   const handlePrintRoute = () => {
     printService.setPrintConfig('80', 'md');
@@ -424,8 +454,12 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
       
       if (savedC) cashInputsRef.current = JSON.parse(savedC);
       else cashInputsRef.current = {};
+      setDraftRevision(prev => prev + 1);
     } catch (e) {
       console.error('Failed to load drafts from localStorage:', e);
+      deliveryInputsRef.current = {};
+      cashInputsRef.current = {};
+      setDraftRevision(prev => prev + 1);
     }
   }, [selectedDate]);
 
@@ -536,12 +570,14 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
       version: 1 // Never create records with version 0
     };
 
+    const paymentRequestId = cashInput > 0 ? generateId() : '';
     const paymentObj: Payment | null = cashInput > 0 ? {
-      id: generateId(),
+      id: paymentRequestId,
       customerId: customer.id,
       date: selectedDate,
       amount: Math.round(cashInput),
       mode: PaymentMode.CASH,
+      clientRequestId: paymentRequestId,
       updatedAt: new Date().toISOString(),
       version: 1 // Never create records with version 0
     } : null;
@@ -549,15 +585,25 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
     // STEP A: Show "Saving..." spinner
     setSyncStatuses(prev => ({ ...prev, [customer.id]: 'saving' }));
 
-    // STEP B: Write to Supabase directly via upsert FIRST
+    // STEP B: Write to Supabase through one atomic RPC FIRST.
+    // Delivery + same-screen cash payment must either both save or both fail.
     let isCloudSuccess = false;
     let cloudErrorMsg = '';
+    let savedDelivery: Delivery = deliveryObj;
+    let savedPayment: Payment | null = paymentObj;
     try {
-      const { error: dErr } = await supabase.from('dp_deliveries').upsert(relationalDataService.toSnakeCase(deliveryObj));
-      if (dErr) throw dErr;
-      if (paymentObj) {
-        const { error: pErr } = await supabase.from('dp_payments').upsert(relationalDataService.toSnakeCase(paymentObj));
-        if (pErr) throw pErr;
+      const { data, error } = await supabase.rpc('save_delivery_entry', {
+        p_delivery: relationalDataService.toSnakeCase(deliveryObj),
+        p_payment: paymentObj ? relationalDataService.toSnakeCase(paymentObj) : null
+      });
+      if (error) throw error;
+      if (data?.delivery) {
+        savedDelivery = relationalDataService.toCamelCase(data.delivery) as Delivery;
+      }
+      if (data?.payment) {
+        savedPayment = relationalDataService.toCamelCase(data.payment) as Payment;
+      } else {
+        savedPayment = null;
       }
       isCloudSuccess = true;
     } catch (err: any) {
@@ -571,47 +617,46 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
       
       // Only update local state AFTER Supabase confirms success
       setDeliveries(prev => {
-        const alreadySaved = prev.some(d => 
-          d.customerId === customer.id && d.date === selectedDate && !d.isAdjustment
+        const existingIndex = prev.findIndex(d => 
+          d.id === savedDelivery.id ||
+          (d.customerId === customer.id && d.date === selectedDate && d.riderId === customer.riderId && !d.isAdjustment)
         );
-        if (alreadySaved) return prev;
-        return [...prev, deliveryObj];
+        if (existingIndex === -1) return [...prev, savedDelivery];
+        return prev.map((d, idx) => idx === existingIndex ? savedDelivery : d);
       });
       
       setAuditLogs(prev => [...prev, {
         id: generateId(),
         action: 'CREATE',
-        entityId: deliveryObj.id,
+        entityId: savedDelivery.id,
         entityType: 'Delivery',
         performedBy: 'System',
         timestamp: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         version: 1,
-        newValue: deliveryObj
+        newValue: savedDelivery
       }]);
 
-      if (paymentObj) {
+      if (savedPayment) {
         setPayments(prev => {
-          const isDuplicate = prev.some(p => 
-            p.customerId === customer.id && 
-            p.date === selectedDate && 
-            p.amount === paymentObj.amount &&
-            Math.abs(new Date(p.updatedAt).getTime() - new Date(paymentObj.updatedAt).getTime()) < 1000
+          const existingIndex = prev.findIndex(p => 
+            p.id === savedPayment!.id ||
+            (!!savedPayment!.linkedDeliveryId && p.linkedDeliveryId === savedPayment!.linkedDeliveryId)
           );
-          if (isDuplicate) return prev;
-          return [...prev, paymentObj];
+          if (existingIndex === -1) return [...prev, savedPayment!];
+          return prev.map((p, idx) => idx === existingIndex ? savedPayment! : p);
         });
 
         setAuditLogs(prev => [...prev, {
           id: generateId(),
           action: 'CREATE',
-          entityId: paymentObj.id,
+          entityId: savedPayment.id,
           entityType: 'Payment',
           performedBy: 'System',
           timestamp: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
           version: 1,
-          newValue: paymentObj
+          newValue: savedPayment
         }]);
       }
     } else {
@@ -710,101 +755,88 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
       
       const originalDelivery = deliveries.find(d => d.customerId === customer.id && d.date === selectedDate && !d.isAdjustment);
       
-      const adjRecord: Delivery = {
-        id: generateId(),
-        customerId: customer.id,
-        date: selectedDate,
-        liters: adjAmount,
-        priceAtTime: Number(milkPrice) || 0,
-        totalAmount: (() => {
-          const raw = (Number(adjAmount) || 0) * (Number(milkPrice) || 0);
-          return isNaN(raw) ? 0 : Math.round(raw * 100) / 100;
-        })(),
-        riderId: customer.riderId,
-        isLocked: true,
-        isAdjustment: true,
-        adjustmentNote: adjustmentNote || "Owner Correction",
-        adjustmentTag: 'reversal',
-        linkedDeliveryId: originalDelivery?.id,
-        updatedAt: new Date().toISOString(),
-        version: 1
-      };
-
-      let isCloudSuccess = false;
-      if (navigator.onLine) {
-        try {
-          const { error } = await supabase.from('dp_deliveries').upsert(relationalDataService.toSnakeCase(adjRecord));
-          if (error) throw error;
-          isCloudSuccess = true;
-        } catch (err) {
-          console.error("Cloud save failed:", err);
-        }
+      const rawTotal = (Number(adjAmount) || 0) * (Number(milkPrice) || 0);
+      const adjustmentId = generateId();
+      let savedEntry: Delivery | Payment | null = null;
+      let savedKind: 'Delivery' | 'Payment' | null = null;
+      let savedAudit: AuditLog | null = null;
+      try {
+        const { data, error } = await supabase.rpc('save_manual_adjustment', {
+          p_adjustment: relationalDataService.toSnakeCase({
+            id: adjustmentId,
+            auditId: generateId(),
+            customerId: customer.id,
+            type: rawTotal >= 0 ? 'DEBIT' : 'CREDIT',
+            amount: Math.round(Math.abs(rawTotal) * 100) / 100,
+            date: selectedDate,
+            note: adjustmentNote || `Owner milk correction (${adjAmount} L)`,
+            adjustmentTag: 'reversal',
+            linkedDeliveryId: originalDelivery?.id,
+            clientRequestId: adjustmentId
+          })
+        });
+        if (error) throw error;
+        savedKind = data.entry_kind;
+        savedEntry = relationalDataService.toCamelCase(data.entry) as Delivery | Payment;
+        savedAudit = data.audit ? relationalDataService.toCamelCase(data.audit) as AuditLog : null;
+      } catch (err) {
+        console.error("Cloud save failed:", err);
       }
 
-      if (!isCloudSuccess) {
+      if (!savedEntry || !savedKind) {
         alert("SAVE FAILED: Check connection");
         setIsAdjProcessing(false);
         return;
       }
 
-      setDeliveries(prev => [...prev, adjRecord]);
-      setAuditLogs(prev => [...prev, {
-        id: generateId(),
-        action: 'CREATE',
-        entityId: adjRecord.id,
-        entityType: 'Delivery',
-        performedBy: 'System',
-        timestamp: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        version: 1,
-        newValue: adjRecord
-      }]);
+      if (savedKind === 'Delivery') {
+        setDeliveries(prev => [...prev, savedEntry as Delivery]);
+      } else {
+        setPayments(prev => [...prev, savedEntry as Payment]);
+      }
+      if (savedAudit) setAuditLogs(prev => [...prev, savedAudit]);
     } else {
       const originalPayment = payments.find(p => p.customerId === customer.id && p.date === selectedDate && !p.isAdjustment);
-      
-      const adjRecord: Payment = {
-        id: generateId(),
-        customerId: customer.id,
-        date: selectedDate,
-        amount: adjAmount,
-        mode: PaymentMode.CASH,
-        isAdjustment: true,
-        adjustmentNote: adjustmentNote || "Owner Correction",
-        adjustmentTag: 'reversal',
-        linkedDeliveryId: originalPayment?.id,
-        updatedAt: new Date().toISOString(),
-        version: 1
-      };
-
-      let isCloudSuccess = false;
-      if (navigator.onLine) {
-        try {
-          const { error } = await supabase.from('dp_payments').upsert(relationalDataService.toSnakeCase(adjRecord));
-          if (error) throw error;
-          isCloudSuccess = true;
-        } catch (err) {
-          console.error("Cloud save failed:", err);
-        }
+      const adjustmentId = generateId();
+      let savedEntry: Delivery | Payment | null = null;
+      let savedKind: 'Delivery' | 'Payment' | null = null;
+      let savedAudit: AuditLog | null = null;
+      try {
+        const { data, error } = await supabase.rpc('save_manual_adjustment', {
+          p_adjustment: relationalDataService.toSnakeCase({
+            id: adjustmentId,
+            auditId: generateId(),
+            customerId: customer.id,
+            type: adjAmount >= 0 ? 'CREDIT' : 'DEBIT',
+            amount: Math.round(Math.abs(adjAmount) * 100) / 100,
+            date: selectedDate,
+            note: adjustmentNote || "Owner cash correction",
+            mode: PaymentMode.CASH,
+            adjustmentTag: 'reversal',
+            linkedDeliveryId: originalPayment?.id,
+            clientRequestId: adjustmentId
+          })
+        });
+        if (error) throw error;
+        savedKind = data.entry_kind;
+        savedEntry = relationalDataService.toCamelCase(data.entry) as Delivery | Payment;
+        savedAudit = data.audit ? relationalDataService.toCamelCase(data.audit) as AuditLog : null;
+      } catch (err) {
+        console.error("Cloud save failed:", err);
       }
 
-      if (!isCloudSuccess) {
+      if (!savedEntry || !savedKind) {
         alert("SAVE FAILED: Check connection");
         setIsAdjProcessing(false);
         return;
       }
 
-      setPayments(prev => [...prev, adjRecord]);
-      setAuditLogs(prev => [...prev, {
-        id: generateId(),
-        action: 'CREATE',
-        entityId: adjRecord.id,
-        entityType: 'Payment',
-        performedBy: 'System',
-        timestamp: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        version: 1,
-        newValue: adjRecord
-      }]);
+      if (savedKind === 'Delivery') {
+        setDeliveries(prev => [...prev, savedEntry as Delivery]);
+      } else {
+        setPayments(prev => [...prev, savedEntry as Payment]);
+      }
+      if (savedAudit) setAuditLogs(prev => [...prev, savedAudit]);
     }
     setAdjustmentModalCustomer(null);
     setAdjustmentNote('');
@@ -813,11 +845,53 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
     setIsAdjProcessing(false);
   };
 
+  const historyItems = useMemo(() => {
+    if (!historyCustomerId) return [];
+
+    const uniqueDeliveries = Array.from(new Map([
+      ...deliveries.filter(d => d.customerId === historyCustomerId && !d.deleted),
+      ...historyExtraDeliveries.filter(d => d.customerId === historyCustomerId && !d.deleted)
+    ].map(d => [d.id, d])).values());
+
+    const uniquePayments = Array.from(new Map([
+      ...payments.filter(p => p.customerId === historyCustomerId && !p.deleted),
+      ...historyExtraPayments.filter(p => p.customerId === historyCustomerId && !p.deleted)
+    ].map(p => [p.id, p])).values());
+
+    return [
+      ...uniqueDeliveries.map(d => ({ ...d, type: 'milk' as const, timestamp: d.updatedAt || `${d.date}T00:00:00` })),
+      ...uniquePayments.map(p => ({ ...p, type: 'payment' as const, timestamp: p.updatedAt || `${p.date}T00:00:00` }))
+    ].sort((a, b) => {
+      const dateCompare = b.date.localeCompare(a.date);
+      if (dateCompare !== 0) return dateCompare;
+      return b.timestamp.localeCompare(a.timestamp);
+    });
+  }, [historyCustomerId, deliveries, payments, historyExtraDeliveries, historyExtraPayments]);
+
+  const loadOlderHistory = async () => {
+    if (!historyCustomerId || isLoadingHistory || !hasOlderHistory) return;
+    setIsLoadingHistory(true);
+    try {
+      const result = await relationalDataService.fetchCustomerLedgerHistory(historyCustomerId, historyBeforeDate);
+      setHistoryExtraDeliveries(prev => Array.from(new Map([...prev, ...result.deliveries].map(d => [d.id, d])).values()));
+      setHistoryExtraPayments(prev => Array.from(new Map([...prev, ...result.payments].map(p => [p.id, p])).values()));
+      setHistoryBeforeDate(result.fromDate);
+      if (!result.hasMore) {
+        setHasOlderHistory(false);
+      }
+    } catch (err) {
+      console.error('Failed to load older history:', err);
+      alert('HISTORY LOAD FAILED: Older records could not be loaded. Please check connection and try again.');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
   const renderCustomerCard = (customer: Customer, isSwipeView: boolean) => {
     if (!customer) return null;
     return (
       <DeliveryRow 
-        key={customer.id}
+        key={`${selectedDate}-${draftRevision}-${customer.id}`}
         customer={customer}
         deliveries={indexedDeliveries.get(customer.id) || []}
         payments={indexedPayments.get(customer.id) || []}
@@ -1059,14 +1133,18 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-2xl z-[150] flex items-center justify-center p-4">
            <div className="bg-white rounded-[4rem] shadow-2xl w-full max-w-lg border-8 border-slate-900 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95">
               <div className="p-10 bg-slate-900 text-white flex justify-between items-center shrink-0">
-                 <div><h3 className="font-black text-2xl uppercase italic tracking-tighter leading-none">Account History</h3></div>
+                 <div>
+                   <h3 className="font-black text-2xl uppercase italic tracking-tighter leading-none">Account History</h3>
+                   <p className="text-[9px] font-black text-slate-500 uppercase tracking-[0.28em] mt-2">Recent 40 days, load older when needed</p>
+                 </div>
                  <button onClick={() => setHistoryCustomerId(null)} className="p-4 bg-white/10 rounded-full"><X size={24}/></button>
               </div>
               <div className="flex-1 overflow-y-auto p-10 space-y-4 scrollbar-hide">
-                 {[
-                   ...deliveries.filter(d => d.customerId === historyCustomerId).map(d => ({ ...d, type: 'milk', timestamp: d.updatedAt })),
-                   ...payments.filter(p => p.customerId === historyCustomerId).map(p => ({ ...p, type: 'payment', timestamp: p.updatedAt }))
-                 ].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).map((item, idx) => (
+                 {historyItems.length === 0 ? (
+                   <div className="py-10 text-center bg-slate-50 rounded-[2rem] border-4 border-dashed border-slate-100">
+                     <p className="text-xs font-black text-slate-400 uppercase tracking-widest">No recent records</p>
+                   </div>
+                 ) : historyItems.map((item, idx) => (
                    <div key={idx} className={`flex gap-5 p-6 rounded-[2rem] border-4 transition-all ${item.isAdjustment ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-100'}`}>
                       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${item.type === 'milk' ? 'bg-blue-600 text-white' : 'bg-green-600 text-white'}`}><ClipboardList size={20}/></div>
                       <div className="flex-1 min-w-0">
@@ -1076,6 +1154,16 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
                       <div className="text-right flex-shrink-0"><p className={`font-black text-xl italic tracking-tighter ${item.type === 'milk' ? 'text-red-500' : 'text-green-600'}`}>{item.type === 'milk' ? `${((item as any).liters).toFixed(1)}L` : `Rs.${(item as any).amount}`}</p></div>
                    </div>
                  ))}
+                 <button
+                   onClick={loadOlderHistory}
+                   disabled={isLoadingHistory || !hasOlderHistory}
+                   className={`w-full py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 transition-all ${
+                     hasOlderHistory ? 'bg-slate-900 text-white hover:bg-blue-600' : 'bg-slate-100 text-slate-400'
+                   } ${isLoadingHistory ? 'opacity-70 cursor-wait' : ''}`}
+                 >
+                   {isLoadingHistory ? <Loader2 size={16} className="animate-spin" /> : <History size={16} />}
+                   {hasOlderHistory ? 'Load Older 40 Days' : 'No Older Records Found'}
+                 </button>
               </div>
            </div>
         </div>

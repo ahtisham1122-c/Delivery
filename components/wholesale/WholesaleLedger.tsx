@@ -131,6 +131,10 @@ const WholesaleLedger: React.FC = () => {
         wholesalePrintService.printWholesaleThermal([deliveryEntry], customer, entry.date, entry.amount, balanceBefore, finalBalanceAfter);
       } else {
         const invNum = await wholesaleDataService.getNextInvoiceNumber();
+        if (!invNum) {
+          alert('Official invoice number could not be issued. Please retry after sync is restored.');
+          return;
+        }
         wholesalePrintService.printWholesaleA4([deliveryEntry], customer, entry.date, entry.amount, balanceBefore, finalBalanceAfter, invNum);
       }
     }

@@ -7,6 +7,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { Rider, Delivery, Payment, RiderClosingRecord, Expense, RiderLoad, UserRole, Customer, PaymentMode } from '../types';
 import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
+import { generateId } from '../services/dataStore';
 import AuditHistory from './AuditHistory';
 
 interface RiderClosingProps {
@@ -142,14 +144,6 @@ const RiderClosing: React.FC<RiderClosingProps> = ({
     setIsProcessing(true);
     setSyncStatus('saving');
 
-    const updatedDeliveries = deliveries.map(d => {
-        const isThisRider = d.riderId === selectedRiderId || customers.find(c => c.id === d.customerId)?.riderId === selectedRiderId;
-        if (d.date === selectedDate && isThisRider) {
-            return { ...d, isLocked: true };
-        }
-        return d;
-    });
-
     const newRecord: RiderClosingRecord = {
       id: generateId(),
       riderId: selectedRiderId,
@@ -167,28 +161,30 @@ const RiderClosing: React.FC<RiderClosingProps> = ({
       version: 1
     };
 
-    let isCloudSuccess = false;
+    let savedRecord: RiderClosingRecord | null = null;
     try {
-      const { error: rErr } = await supabase.from('dp_closing_records').upsert(newRecord);
+      const { data, error: rErr } = await supabase.rpc('save_rider_closing', {
+        p_record: relationalDataService.toSnakeCase(newRecord)
+      });
       if (rErr) throw rErr;
-      
-      // Also update deliveries in cloud
-      const lockedDeliveries = updatedDeliveries.filter(d => d.date === selectedDate && (d.riderId === selectedRiderId || customers.find(c => c.id === d.customerId)?.riderId === selectedRiderId));
-      if (lockedDeliveries.length > 0) {
-        const { error: dErr } = await supabase.from('dp_deliveries').upsert(lockedDeliveries);
-        if (dErr) console.error("Failed to lock deliveries in cloud:", dErr);
-      }
-      
-      isCloudSuccess = true;
+      if (!data?.closing_record) throw new Error('Closing record was not confirmed by server.');
+      savedRecord = relationalDataService.toCamelCase(data.closing_record) as RiderClosingRecord;
     } catch (err) {
       console.error("Cloud save failed:", err);
       alert("AUDIT LOCK FAILED: Data not synchronized. Check internet.");
     }
 
-    if (isCloudSuccess) {
+    if (savedRecord) {
       setSyncStatus('saved');
-      setDeliveries(updatedDeliveries);
-      setClosingRecords(prev => [newRecord, ...prev]);
+      setDeliveries(prev => prev.map(d => {
+        const customerRiderId = customers.find(c => c.id === d.customerId)?.riderId;
+        const isThisRider = d.riderId === selectedRiderId || customerRiderId === selectedRiderId;
+        if (d.date === selectedDate && isThisRider && !d.deleted && !d.isAdjustment) {
+          return { ...d, isLocked: true, updatedAt: savedRecord.updatedAt };
+        }
+        return d;
+      }));
+      setClosingRecords(prev => [savedRecord, ...prev]);
     } else {
       setSyncStatus('idle');
       setIsProcessing(false);

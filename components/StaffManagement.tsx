@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Rider, UserRole, Customer } from '../types';
 import { formatPKR, generateId } from '../services/dataStore';
 import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
 
 interface StaffManagementProps {
   riders: Rider[];
@@ -67,7 +68,7 @@ const StaffManagement: React.FC<StaffManagementProps> = ({ riders, setRiders, ro
     let isCloudSuccess = false;
     let cloudErrorMsg = '';
     try {
-      const { error: rErr } = await supabase.from('dp_riders').upsert(updatedRider);
+      const { error: rErr } = await supabase.from('dp_riders').upsert(relationalDataService.toSnakeCase(updatedRider));
       if (rErr) throw rErr;
       isCloudSuccess = true;
     } catch (err: any) {

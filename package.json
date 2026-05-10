@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives",
+    "check:production": "node scripts/production-integrity-check.mjs"
   },
   "dependencies": {
     "@google/genai": "*",

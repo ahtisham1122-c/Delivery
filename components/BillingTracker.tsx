@@ -12,6 +12,8 @@ import { calculateCycleBreakdown } from '../services/ledgerUtils';
 import { printService } from '../services/printService';
 import { exportService } from '../services/exportService';
 import { IndividualReceipt } from './Receipts';
+import { supabase } from '../services/supabaseClient';
+import { relationalDataService } from '../services/relationalDataService';
 
 interface BillingTrackerProps {
   customers: Customer[];
@@ -47,7 +49,7 @@ const BillingRow = React.memo(React.forwardRef<HTMLDivElement, {
     handleExportExcel
   } = props;
   const bal = balances[customer.id] || 0;
-  const breakdown = useMemo(() => calculateCycleBreakdown(customer, deliveries, payments), [customer, deliveries, payments]);
+  const breakdown = useMemo(() => calculateCycleBreakdown(customer, deliveries, payments, bal), [customer, deliveries, payments, bal]);
 
   return (
     <motion.div 
@@ -73,21 +75,24 @@ const BillingRow = React.memo(React.forwardRef<HTMLDivElement, {
         </p>
       </div>
 
-      {breakdown.length > 0 && (
-        <div className="bg-slate-900 p-5 rounded-[2rem] border border-slate-800 space-y-3">
+      <div className="bg-slate-900 p-5 rounded-[2rem] border border-slate-800 space-y-3">
           <p className="text-[8px] font-black text-slate-500 uppercase tracking-widest">Cycle Breakdown</p>
           <div className="space-y-2">
-            {breakdown.map((cycle) => (
+            {breakdown.length > 0 ? breakdown.map((cycle) => (
               <div key={cycle.cycleName} className="flex justify-between items-center text-[10px] font-bold">
                 <span className="text-slate-400">{cycle.cycleName}</span>
                 <span className={cycle.outstanding > 0 ? 'text-red-400' : 'text-green-400'}>
                   Rs. {formatPKR(Math.abs(cycle.outstanding))}
                 </span>
               </div>
-            ))}
+            )) : (
+              <div className="flex justify-between items-center text-[10px] font-bold">
+                <span className="text-slate-400">All Cycles Settled</span>
+                <span className="text-green-400">Rs. 0</span>
+              </div>
+            )}
           </div>
         </div>
-      )}
 
       <div className="grid grid-cols-2 gap-3">
           <button 
@@ -232,36 +237,44 @@ const BillingTracker: React.FC<BillingTrackerProps> = ({
 
     setIsProcessing(true);
 
+    const requestId = generateId();
     const newPayment: Payment = {
-      id: generateId(),
+      id: requestId,
       customerId: paymentForm.customerId,
       amount: Math.round(amount),
       date: today,
       mode: paymentForm.mode,
       note: paymentForm.note,
+      clientRequestId: requestId,
       updatedAt: new Date().toISOString(),
       version: 1
     };
 
-    // STEP B: Write to Supabase directly via upsert FIRST
-    let isCloudSuccess = false;
     (async () => {
+        let savedPayment: Payment | null = null;
+        let wasDuplicate = false;
         try {
-            const { error: pErr } = await supabase.from('dp_payments').upsert(relationalDataService.toSnakeCase(newPayment));
+            const { data, error: pErr } = await supabase.rpc('save_standalone_payment', {
+              p_payment: relationalDataService.toSnakeCase(newPayment)
+            });
             if (pErr) throw pErr;
-            isCloudSuccess = true;
+            if (!data?.payment) throw new Error('Payment was not confirmed by server.');
+            savedPayment = relationalDataService.toCamelCase(data.payment) as Payment;
+            wasDuplicate = Boolean(data.duplicate);
         } catch (err) {
             console.error("Cloud save failed:", err);
             alert("PAYMENT SYNC FAILED: Record not confirmed on server. Please check internet.");
         }
 
-        // STEP C & D
-        if (isCloudSuccess) {
+        if (savedPayment) {
             setPayments(prev => {
-                const alreadyExists = prev.some(p => p.id === newPayment.id);
+                const alreadyExists = prev.some(p => p.id === savedPayment.id);
                 if (alreadyExists) return prev;
-                return [newPayment, ...prev];
+                return [savedPayment, ...prev];
             });
+            if (wasDuplicate) {
+              alert("Duplicate payment blocked: the existing server record was used.");
+            }
             setIsModalOpen(false);
             setPaymentForm({ customerId: '', amount: '', note: '', mode: PaymentMode.CASH });
         }

@@ -88,7 +88,7 @@ const CloudSyncCenter: React.FC<CloudSyncCenterProps> = ({
           </div>
           <p className="text-xs font-bold text-slate-500 leading-relaxed">
             Your phone is currently storing <span className="text-slate-900 font-black">{totalRecordsCount.toLocaleString()} entries</span>. 
-            Once this hits 10,000, consider using the Archive feature to keep the app fast.
+            The app keeps daily work light by loading recent records first and pulling older history only when requested.
           </p>
           <div className="space-y-2">
             <div className="flex justify-between text-[10px] font-black uppercase text-slate-400">

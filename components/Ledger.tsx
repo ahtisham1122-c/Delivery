@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { 
   ArrowLeft, Calendar, ChevronRight, Search,
   Printer, RefreshCcw, Phone, Settings2, Monitor, Smartphone,
-  Plus, Minus, X, ShieldCheck
+  Plus, Minus, X, ShieldCheck, FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Customer, Delivery, Payment, Rider, MonthlyArchive, AuditLog } from '../types';
@@ -19,7 +19,6 @@ interface ReportsProps {
   archives: MonthlyArchive[];
   riderFilterId: string;
   auditLogs: AuditLog[];
-  onSyncArchives: () => void;
   onAddAdjustment: (adj: { customerId: string, type: 'DEBIT' | 'CREDIT', amount: number, note: string }) => void;
 }
 
@@ -41,38 +40,44 @@ const KhataRow = React.memo(React.forwardRef<HTMLDivElement, {
       exit={{ opacity: 0, scale: 0.98 }}
       whileTap={{ scale: 0.99 }}
       onClick={() => onSelect(customer.id)}
-      className={`group bg-white p-4 rounded-lg border border-slate-200 shadow-sm flex items-center justify-between gap-4 cursor-pointer hover:border-slate-300 hover:shadow-md transition-all ${!customer.active ? 'opacity-60 bg-slate-50' : ''}`}
+      className={`group relative overflow-hidden bg-white p-4 md:p-5 rounded-xl border border-slate-200 shadow-sm cursor-pointer hover:border-blue-300 hover:shadow-lg transition-all ${!customer.active ? 'opacity-60 bg-slate-50' : ''}`}
     >
-      <div className="flex items-center gap-4">
-        <div className="w-10 h-10 rounded shadow-sm bg-white border border-slate-200 flex items-center justify-center text-slate-600 font-bold text-sm">
+      <div className="absolute left-0 top-0 h-full w-1 bg-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+      <div className="grid grid-cols-[auto_1fr] md:grid-cols-[auto_1fr_auto_auto] gap-4 items-center">
+        <div className="w-11 h-11 rounded-lg shadow-sm bg-slate-900 border border-slate-800 flex items-center justify-center text-white font-black text-sm">
           {customer.name.charAt(0).toUpperCase()}
         </div>
-        <div>
-          <p className="font-semibold text-sm text-slate-900">{customer.name}</p>
-          {customer.urduName && <p className="text-sm text-slate-500 font-normal" dir="rtl">{customer.urduName}</p>}
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-black text-sm md:text-base text-slate-950 truncate">{customer.name}</p>
+            {!customer.active && <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[10px] font-black text-slate-500 uppercase">Inactive</span>}
+          </div>
+          {customer.urduName && <p className="text-sm text-slate-500 font-semibold truncate" dir="rtl">{customer.urduName}</p>}
+          <p className="text-[11px] font-bold text-slate-400 uppercase mt-1">Order #{customer.deliveryOrder || 0} · {customer.paymentCycle}</p>
         </div>
-      </div>
-      
-      <div className="flex flex-col items-end gap-1 flex-1">
-        <div className="flex justify-between items-center w-full max-w-[140px]">
-          <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Balance</span>
-          <span className={`font-mono font-semibold text-sm ${balance > 0 ? 'text-red-600' : 'text-slate-900'}`}>Rs. {formatPKR(balance)}</span>
+        <div className="col-span-2 md:col-span-1 bg-slate-50 border border-slate-200 rounded-lg p-3 md:min-w-[150px]">
+          <p className="text-[10px] font-black text-slate-400 uppercase">Current Bill</p>
+          <p className="font-mono text-sm md:text-base font-black text-slate-800 mt-1">Rs. {formatPKR(mBill)}</p>
         </div>
-        <div className="flex justify-between items-center w-full max-w-[140px]">
-          <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Current Bill</span>
-          <span className="font-mono text-sm text-slate-600">Rs. {formatPKR(mBill)}</span>
+        <div className="col-span-2 md:col-span-1 flex items-center justify-between md:justify-end gap-4">
+          <div className="text-left md:text-right">
+            <p className="text-[10px] font-black text-slate-400 uppercase">Closing Balance</p>
+            <p className={`font-mono font-black text-lg ${balance > 0.01 ? 'text-red-600' : balance < -0.01 ? 'text-blue-600' : 'text-emerald-600'}`}>
+              Rs. {formatPKR(Math.abs(balance))}
+            </p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase">{balance > 0.01 ? 'Receivable' : balance < -0.01 ? 'Advance' : 'Settled'}</p>
+          </div>
+          <div className="w-9 h-9 rounded-lg bg-white border border-slate-200 text-slate-400 group-hover:text-blue-600 group-hover:border-blue-200 flex items-center justify-center transition-colors">
+            <ChevronRight size={18}/>
+          </div>
         </div>
-      </div>
-      
-      <div className="p-2 text-slate-300 group-hover:text-slate-500 transition-colors hidden sm:block">
-        <ChevronRight size={18}/>
       </div>
     </motion.div>
   );
 }));
 
 const Reports: React.FC<ReportsProps> = ({ 
-  customers, deliveries, payments, riderFilterId, archives, onSyncArchives, onAddAdjustment
+  customers, deliveries, payments, riderFilterId, archives, onAddAdjustment
 }) => {
   const [reportType, setReportType] = useState<'khata' | 'pnl'>('khata');
   
@@ -264,6 +269,28 @@ const Reports: React.FC<ReportsProps> = ({
     return res;
   }, [relevantArchive, customers, uniqueDeliveries, uniquePayments, selectedMonth, selectedYear]);
 
+  const ledgerListStats = useMemo(() => {
+    const visibleCustomerIds = new Set(filteredCustomers.map(c => c.id));
+    const totalReceivable = filteredCustomers.reduce((sum, c) => {
+      const bal = Number(monthlyBalances[c.id]) || 0;
+      return sum + (bal > 0 ? bal : 0);
+    }, 0);
+    const totalAdvance = filteredCustomers.reduce((sum, c) => {
+      const bal = Number(monthlyBalances[c.id]) || 0;
+      return sum + (bal < 0 ? Math.abs(bal) : 0);
+    }, 0);
+    const monthlyBilling = Array.from(indexedMonthDeliveries.entries()).reduce((sum, [customerId, rows]) => {
+      if (!visibleCustomerIds.has(customerId)) return sum;
+      return sum + rows.reduce((inner, d) => inner + (Number(d.totalAmount) || 0), 0);
+    }, 0);
+    return {
+      customers: filteredCustomers.length,
+      totalReceivable: Math.round(totalReceivable * 100) / 100,
+      totalAdvance: Math.round(totalAdvance * 100) / 100,
+      monthlyBilling: Math.round(monthlyBilling * 100) / 100
+    };
+  }, [filteredCustomers, monthlyBalances, indexedMonthDeliveries]);
+
   if (selectedCustomerId && customerDetailData) {
     const { customer, openingBalance, ledgerItems, closingBalance } = customerDetailData;
     
@@ -275,6 +302,8 @@ const Reports: React.FC<ReportsProps> = ({
 
     const totalBilling = ledgerItems.reduce((sum, item) => sum + (item.debit || 0), 0);
     const totalRecovery = ledgerItems.reduce((sum, item) => sum + (item.credit || 0), 0);
+    const totalLiters = ledgerItems.reduce((sum, item) => sum + (item.type === 'milk' ? Number((item as any).liters || 0) : 0), 0);
+    const balanceTone = closingBalance > 0.01 ? 'text-red-600' : closingBalance < -0.01 ? 'text-blue-600' : 'text-green-600';
 
     const handlePrint = () => {
       printService.setPrintConfig(printProfile, printFontSize);
@@ -631,98 +660,145 @@ const Reports: React.FC<ReportsProps> = ({
           </div>
         )}
 
-        <div className="bg-white p-6 md:p-10 rounded-2xl border border-slate-200 shadow-sm space-y-8 mt-6">
-           <div className="flex flex-col md:flex-row justify-between items-start gap-8">
-              <div className="space-y-4">
-                 <div className="space-y-1">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Customer Account</p>
-                    <h2 className="text-2xl font-bold text-slate-900 tracking-tight">{customer.name}</h2>
-                    {customer.urduName && <p className="text-xl font-medium text-slate-600" dir="rtl">{customer.urduName}</p>}
-                 </div>
-                 
-                 <div className="flex items-center gap-2 text-slate-600">
-                    <Phone size={16} className="text-slate-400" />
-                    <p className="text-sm font-medium">{customer.phone || 'No phone number provided'}</p>
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mt-6 overflow-hidden">
+           <div className="p-5 md:p-8 border-b border-slate-200 bg-slate-950 text-white">
+              <div className="flex flex-col lg:flex-row justify-between gap-8">
+                 <div className="space-y-5">
+                    <div className="flex items-start gap-4">
+                       <div className="w-12 h-12 rounded-xl bg-white/10 border border-white/10 text-white flex items-center justify-center shadow-sm">
+                          <FileText size={22} />
+                       </div>
+                       <div className="min-w-0">
+                          <p className="text-[11px] font-black text-slate-400 uppercase">Customer Statement</p>
+                          <h2 className="text-2xl md:text-3xl font-black text-white">{customer.name}</h2>
+                          {customer.urduName && <p className="text-xl font-semibold text-cyan-300 mt-1" dir="rtl">{customer.urduName}</p>}
+                       </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                       <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 border border-white/10 text-xs font-bold text-slate-100">
+                          <Calendar size={14} /> {getMonthName(selectedMonth)} {selectedYear}
+                       </span>
+                       <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 border border-white/10 text-xs font-bold text-slate-100">
+                          <Phone size={14} /> {customer.phone || 'No phone'}
+                       </span>
+                       {relevantArchive && (
+                         <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-xs font-bold">
+                            <ShieldCheck size={14} /> Locked Archive
+                         </span>
+                       )}
+                    </div>
                  </div>
 
-                 <div className="flex flex-wrap gap-3">
-                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-md w-fit">
-                       <Calendar size={14} className="text-slate-500" />
-                       <p className="text-xs font-semibold text-slate-700 uppercase tracking-wider">{getMonthName(selectedMonth)} {selectedYear}</p>
-                    </div>
-                    {relevantArchive && (
-                      <div className="flex items-center gap-2 bg-slate-800 text-white px-3 py-1.5 rounded-md w-fit">
-                         <ShieldCheck size={14} />
-                         <p className="text-xs font-semibold uppercase tracking-wider">Locked Archive</p>
-                      </div>
-                    )}
-                 </div>
-              </div>
-              
-              <div className="grid grid-cols-2 md:flex gap-4 w-full md:w-auto">
-                 <div className="flex-1 bg-white p-5 rounded-xl border border-slate-200 shadow-sm min-w-[140px]">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Opening</p>
-                    <p className="text-lg font-mono font-medium text-slate-700">Rs. {formatPKR(openingBalance)}</p>
-                 </div>
-                 <div className="flex-1 bg-white p-5 rounded-xl border border-slate-200 shadow-sm min-w-[140px]">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Total Bill</p>
-                    <p className="text-lg font-mono font-medium text-red-600">Rs. {formatPKR(totalBilling)}</p>
-                 </div>
-                 <div className="flex-1 bg-white p-5 rounded-xl border border-slate-200 shadow-sm min-w-[140px]">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Total Rec.</p>
-                    <p className="text-lg font-mono font-medium text-green-600">Rs. {formatPKR(totalRecovery)}</p>
-                 </div>
-                 <div className="flex-1 bg-slate-900 text-white p-5 rounded-xl shadow-md min-w-[160px]">
-                    <p className="text-xs font-semibold text-slate-300 uppercase tracking-widest mb-2">Closing Bal</p>
-                    <p className="text-2xl font-mono font-bold">Rs. {formatPKR(closingBalance)}</p>
+                 <div className="lg:text-right bg-white text-slate-950 rounded-xl p-5 min-w-full lg:min-w-[280px]">
+                    <p className="text-[11px] font-black text-slate-500 uppercase">Closing Balance</p>
+                    <p className={`text-3xl md:text-4xl font-black mt-2 ${balanceTone}`}>Rs. {formatPKR(Math.abs(closingBalance))}</p>
+                    <p className="text-xs font-bold text-slate-500 mt-1">
+                      {closingBalance > 0.01 ? 'Receivable from customer' : closingBalance < -0.01 ? 'Customer advance' : 'Account settled'}
+                    </p>
                  </div>
               </div>
            </div>
 
-           <div className="overflow-x-auto rounded-xl border border-slate-200">
+           <div className="grid grid-cols-2 lg:grid-cols-5 bg-white">
+              {[
+                ['Opening', `Rs. ${formatPKR(openingBalance)}`, 'text-slate-800', 'bg-slate-50'],
+                ['Milk Qty', `${totalLiters.toFixed(1)}L`, 'text-blue-700', 'bg-blue-50'],
+                ['Billing', `Rs. ${formatPKR(totalBilling)}`, 'text-red-600', 'bg-red-50'],
+                ['Recovery', `Rs. ${formatPKR(totalRecovery)}`, 'text-emerald-700', 'bg-emerald-50'],
+                ['Entries', ledgerItems.length.toString(), 'text-slate-800', 'bg-slate-50']
+              ].map(([label, value, color, bg]) => (
+                <div key={label} className="p-4 md:p-5 border-r border-b border-slate-200 last:border-r-0">
+                  <div className={`${bg} rounded-xl border border-white p-3`}>
+                    <p className="text-[10px] font-black text-slate-500 uppercase">{label}</p>
+                    <p className={`text-base md:text-lg font-black font-mono mt-1 ${color}`}>{value}</p>
+                  </div>
+                </div>
+              ))}
+           </div>
+
+           <div className="md:hidden p-4 space-y-3 bg-slate-50 border-t border-slate-200">
+              <div className="bg-white rounded-xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-500 uppercase">Opening Balance</span>
+                  <span className="font-mono font-black text-slate-900">Rs. {formatPKR(openingBalance)}</span>
+                </div>
+              </div>
+              {ledgerItemsWithBalance.map((entry, i) => {
+                const d = entry as any;
+                const isAdj = d.isAdjustment;
+                const particulars = d.type === 'milk' ? `${d.liters || 0}L` : 'Cash';
+                return (
+                  <div key={i} className={`bg-white rounded-xl border p-4 shadow-sm ${isAdj ? 'border-orange-200' : d.type === 'milk' ? 'border-blue-100' : 'border-emerald-100'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-black text-slate-400 uppercase">{parseDateParts(entry.sortDate).day} {getMonthName(selectedMonth).slice(0, 3)}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className={`inline-flex px-2.5 py-1 rounded-lg text-[10px] font-black uppercase ${d.type === 'milk' ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                            {d.type === 'milk' ? 'Milk' : 'Payment'}
+                          </span>
+                          <span className="font-black text-slate-900">{particulars}</span>
+                        </div>
+                        {isAdj && <p className="text-xs text-orange-600 flex items-center gap-1 mt-2"><RefreshCcw size={10}/> {d.adjustmentNote}</p>}
+                      </div>
+                      <div className="text-right">
+                        <p className={`font-mono font-black ${entry.debit !== 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                          {entry.debit !== 0 ? `+ Rs. ${formatPKR(entry.debit)}` : `- Rs. ${formatPKR(entry.credit)}`}
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase mt-2">Balance</p>
+                        <p className="font-mono font-black text-slate-950">Rs. {formatPKR(entry.runningBal)}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+           </div>
+
+           <div className="hidden md:block overflow-x-auto border-t border-slate-200">
               <table className="w-full text-left border-collapse">
-                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                    <tr className="text-xs font-semibold uppercase tracking-widest">
+                 <thead className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                    <tr className="text-[11px] font-black uppercase">
                        <th className="px-6 py-4">Date</th>
                        <th className="px-6 py-4">Particulars</th>
-                       <th className="px-6 py-4 text-right">Debit (+)</th>
-                       <th className="px-6 py-4 text-right">Credit (-)</th>
-                       <th className="px-6 py-4 text-right bg-slate-100">Balance</th>
+                       <th className="px-6 py-4 text-right">Debit</th>
+                       <th className="px-6 py-4 text-right">Credit</th>
+                       <th className="px-6 py-4 text-right bg-slate-100">Running Balance</th>
                     </tr>
                  </thead>
                  <tbody className="divide-y divide-slate-100 text-sm">
                     <tr className="bg-white">
-                       <td colSpan={2} className="px-6 py-4 font-medium text-slate-500">B/F From Prev Month</td>
-                       <td className="px-6 py-4 text-right text-slate-400">-</td>
-                       <td className="px-6 py-4 text-right text-slate-400">-</td>
-                       <td className="px-6 py-4 text-right font-mono font-semibold text-slate-800 bg-slate-50/50">Rs. {formatPKR(openingBalance)}</td>
+                       <td className="px-6 py-4 text-slate-500 whitespace-nowrap font-bold">B/F</td>
+                       <td className="px-6 py-4">
+                         <span className="inline-flex px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-[11px] font-black text-slate-600 uppercase">Opening Balance</span>
+                       </td>
+                       <td className="px-6 py-4 text-right text-slate-300">-</td>
+                       <td className="px-6 py-4 text-right text-slate-300">-</td>
+                       <td className="px-6 py-4 text-right font-mono font-black text-slate-900 bg-slate-50">Rs. {formatPKR(openingBalance)}</td>
                     </tr>
                     {ledgerItemsWithBalance.map((entry, i) => {
                       const d = entry as any;
                       const isAdj = d.isAdjustment;
-                      const particulars = d.type === 'milk' 
-                        ? `${d.liters || 0}L Milk Delivery`
-                        : 'Cash Payment';
+                      const particulars = d.type === 'milk' ? `${d.liters || 0}L` : 'Cash';
                       return (
-                        <tr key={i} className={`hover:bg-slate-50 transition-colors border-l-4 ${isAdj ? 'border-orange-400 bg-orange-50/20 hover:bg-orange-50/40' : 'border-transparent hover:border-slate-300 bg-white'}`}>
-                           <td className="px-6 py-4 text-slate-500 whitespace-nowrap">{parseDateParts(entry.sortDate).day} {getMonthName(selectedMonth).slice(0,3)}</td>
+                        <tr key={i} className={`hover:bg-slate-50 transition-colors border-l-4 ${isAdj ? 'border-orange-400 bg-orange-50/40' : d.type === 'milk' ? 'border-blue-500 bg-white' : 'border-emerald-500 bg-white'}`}>
+                           <td className="px-6 py-4 text-slate-500 whitespace-nowrap font-bold">{parseDateParts(entry.sortDate).day} {getMonthName(selectedMonth).slice(0,3)}</td>
                            <td className="px-6 py-4">
-                              <div className="flex flex-col">
-                                 <span className="font-medium text-slate-800">{particulars}</span>
+                              <div className="flex flex-col gap-1">
+                                 <div className="flex items-center gap-2">
+                                   <span className={`inline-flex px-2.5 py-1 rounded-lg text-[11px] font-black uppercase ${d.type === 'milk' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
+                                     {d.type === 'milk' ? 'Milk' : 'Payment'}
+                                   </span>
+                                   <span className="font-black text-slate-900">{particulars}</span>
+                                 </div>
                                  {isAdj && <span className="text-xs text-orange-600 flex items-center gap-1 mt-1"><RefreshCcw size={10}/> {d.adjustmentNote}</span>}
                               </div>
                            </td>
                            <td className="px-6 py-4 text-right font-mono">
-                              {entry.debit !== 0 ? (
-                                 <span className="text-red-600">Rs. {formatPKR(entry.debit)}</span>
-                              ) : <span className="text-slate-300">-</span>}
+                              {entry.debit !== 0 ? <span className="text-red-600 font-black">Rs. {formatPKR(entry.debit)}</span> : <span className="text-slate-300">-</span>}
                            </td>
                            <td className="px-6 py-4 text-right font-mono">
-                              {entry.credit !== 0 ? (
-                                 <span className="text-green-600">Rs. {formatPKR(entry.credit)}</span>
-                              ) : <span className="text-slate-300">-</span>}
+                              {entry.credit !== 0 ? <span className="text-emerald-700 font-black">Rs. {formatPKR(entry.credit)}</span> : <span className="text-slate-300">-</span>}
                            </td>
-                           <td className="px-6 py-4 text-right font-mono font-semibold text-slate-800 bg-slate-50/50">Rs. {formatPKR(entry.runningBal)}</td>
+                           <td className="px-6 py-4 text-right font-mono font-black text-slate-900 bg-slate-50">Rs. {formatPKR(entry.runningBal)}</td>
                         </tr>
                       );
                     })}
@@ -735,52 +811,75 @@ const Reports: React.FC<ReportsProps> = ({
   }
 
   return (
-    <div className="p-4 md:p-8 space-y-6 animate-in fade-in duration-500 min-h-screen bg-slate-50/50">
-      <div className="flex flex-col md:flex-row gap-6 items-center justify-between bg-white p-5 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
-        <div className="flex bg-slate-100 p-1.5 rounded-lg w-full md:w-auto">
-          <button onClick={() => setReportType('khata')} className={`flex-1 md:flex-none px-6 py-2 rounded-md font-semibold text-xs tracking-wide transition-all ${reportType === 'khata' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>Ledger View</button>
-          <button onClick={() => setReportType('pnl')} className={`flex-1 md:flex-none px-6 py-2 rounded-md font-semibold text-xs tracking-wide transition-all ${reportType === 'pnl' ? 'bg-white shadow-sm text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}>Profit & Loss</button>
-        </div>
-        
-        <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
-              type="text" 
-              placeholder="Search customers..." 
-              className="pl-10 pr-10 py-2.5 bg-white border border-slate-300 rounded-lg text-sm font-medium text-slate-800 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 w-full md:w-64 transition-all shadow-sm"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-            {searchTerm && (
-              <button 
-                onClick={() => setSearchTerm('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center bg-slate-200 rounded-full text-slate-600 hover:bg-slate-300 transition-colors"
-              >
-                <X size={12} />
-              </button>
-            )}
+    <div className="p-4 md:p-8 space-y-6 animate-in fade-in duration-500 min-h-screen bg-slate-100">
+      <div className="bg-slate-950 text-white rounded-2xl border border-slate-900 shadow-sm overflow-hidden">
+        <div className="p-5 md:p-7 flex flex-col xl:flex-row gap-6 justify-between">
+          <div className="space-y-4">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/10 border border-white/10 text-[11px] font-black text-slate-300 uppercase">
+              <ShieldCheck size={14} /> Accounting Ledger
+            </div>
+            <div>
+              <h1 className="text-2xl md:text-3xl font-black text-white">Customer Accounts</h1>
+              <p className="text-sm font-semibold text-slate-400 mt-1">{getMonthName(selectedMonth)} {selectedYear} · {ledgerListStats.customers} visible accounts</p>
+            </div>
           </div>
-          <div className="flex gap-3">
-            <select className="flex-1 px-4 py-2.5 bg-white border border-slate-300 rounded-lg text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm" value={selectedMonth} onChange={(e) => setSelectedMonth(parseInt(e.target.value))}>
-              {Array.from({length: 12}).map((_, i) => <option key={i} value={i}>{getMonthName(i)}</option>)}
-            </select>
-            <select className="flex-1 px-4 py-2.5 bg-white border border-slate-300 rounded-lg text-sm font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shadow-sm" value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))}>
-              {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-            <button 
-              onClick={onSyncArchives}
-              title="Sync Balances from Archives"
-              className="px-4 py-2.5 bg-white text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50 hover:text-slate-900 transition-all shadow-sm group flex items-center justify-center"
-            >
-              <RefreshCcw size={16} className="group-hover:rotate-180 transition-transform duration-500" />
-            </button>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 w-full xl:max-w-3xl">
+            {[
+              ['Receivable', `Rs. ${formatPKR(ledgerListStats.totalReceivable)}`, 'text-red-300'],
+              ['Advance', `Rs. ${formatPKR(ledgerListStats.totalAdvance)}`, 'text-cyan-300'],
+              ['Month Bill', `Rs. ${formatPKR(ledgerListStats.monthlyBilling)}`, 'text-amber-200'],
+              ['Accounts', ledgerListStats.customers.toString(), 'text-white']
+            ].map(([label, value, color]) => (
+              <div key={label} className="bg-white/10 border border-white/10 rounded-xl p-4">
+                <p className="text-[10px] font-black text-slate-400 uppercase">{label}</p>
+                <p className={`font-mono font-black text-base md:text-lg mt-1 ${color}`}>{value}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white p-4 md:p-5 border-t border-white/10">
+          <div className="flex flex-col lg:flex-row gap-4 justify-between">
+            <div className="flex bg-slate-100 p-1.5 rounded-xl w-full lg:w-auto">
+              <button onClick={() => setReportType('khata')} className={`flex-1 lg:flex-none px-5 py-2.5 rounded-lg font-black text-xs transition-all ${reportType === 'khata' ? 'bg-white shadow-sm text-slate-950 border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>Ledger View</button>
+              <button onClick={() => setReportType('pnl')} className={`flex-1 lg:flex-none px-5 py-2.5 rounded-lg font-black text-xs transition-all ${reportType === 'pnl' ? 'bg-white shadow-sm text-slate-950 border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`}>Profit & Loss</button>
+            </div>
+            
+            <div className="flex flex-col md:flex-row gap-3 w-full lg:w-auto">
+              <div className="relative flex-1 md:min-w-[280px]">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={17} />
+                <input 
+                  type="text" 
+                  placeholder="Search customer name..." 
+                  className="pl-11 pr-10 py-3 bg-white border border-slate-300 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 w-full transition-all"
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                />
+                {searchTerm && (
+                  <button 
+                    onClick={() => setSearchTerm('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center bg-slate-100 rounded-lg text-slate-500 hover:bg-slate-200 transition-colors"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <select className="px-4 py-3 bg-white border border-slate-300 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" value={selectedMonth} onChange={(e) => setSelectedMonth(parseInt(e.target.value))}>
+                  {Array.from({length: 12}).map((_, i) => <option key={i} value={i}>{getMonthName(i)}</option>)}
+                </select>
+                <select className="px-4 py-3 bg-white border border-slate-300 rounded-xl text-sm font-black text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" value={selectedYear} onChange={(e) => setSelectedYear(parseInt(e.target.value))}>
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
       {reportType === 'khata' ? (
-        <div className="space-y-4">
+        <div className="space-y-3">
           <AnimatePresence mode="popLayout">
             {filteredCustomers.map(c => (
               <KhataRow 
@@ -796,17 +895,17 @@ const Reports: React.FC<ReportsProps> = ({
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="py-20 text-center"
+              className="py-20 text-center bg-white rounded-2xl border border-slate-200"
             >
               <div className="flex flex-col items-center gap-3 text-slate-400">
                 <Search size={32} />
-                <p className="font-semibold text-sm tracking-wide">No customers found matching "{searchTerm}"</p>
+                <p className="font-bold text-sm">No customers found matching "{searchTerm}"</p>
               </div>
             </motion.div>
           )}
         </div>
       ) : (
-        <div className="py-20 text-center text-slate-500 font-semibold uppercase tracking-wide">P&L view is currently calculating based on standard logic.</div>
+        <div className="py-20 text-center bg-white rounded-2xl border border-slate-200 text-slate-500 font-bold uppercase">P&L view is currently calculating based on standard logic.</div>
       )}
     </div>
   );

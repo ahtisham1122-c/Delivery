@@ -10,7 +10,6 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
       'import.meta.env.VITE_SUPABASE_KEY': JSON.stringify(env.VITE_SUPABASE_KEY || ''),
-      'import.meta.env.VITE_OWNER_PIN': JSON.stringify(env.VITE_OWNER_PIN || ''),
     },
     build: {
       outDir: 'dist',

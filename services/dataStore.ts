@@ -116,6 +116,27 @@ export const getStoredData = (key: string, defaultValue: any) => {
   return stored ? JSON.parse(stored) : defaultValue;
 };
 
+export const BUSINESS_CACHE_KEYS = [
+  'customers',
+  'riders',
+  'deliveries',
+  'payments',
+  'prices',
+  'expenses',
+  'riderLoads',
+  'archives',
+  'auditLogs',
+  'closingRecords',
+  'draft_payment'
+];
+
+export const clearBusinessCache = (): void => {
+  BUSINESS_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
+  Object.keys(localStorage)
+    .filter(key => key.startsWith('draft_d_') || key.startsWith('draft_c_'))
+    .forEach(key => localStorage.removeItem(key));
+};
+
 export const saveToStore = (key: string, data: any): void => {
   const SERVER_ONLY_KEYS = ['archives', 'auditLogs', 'closingRecords'];
   if (SERVER_ONLY_KEYS.includes(key)) return;

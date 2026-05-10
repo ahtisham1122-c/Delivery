@@ -30,26 +30,24 @@ GROUP BY rider_id, date
 HAVING count(*) > 1;
 */
 
--- Add unique constraints
+-- Add partial unique indexes. Postgres does not support partial UNIQUE
+-- constraints via ALTER TABLE ... ADD CONSTRAINT ... WHERE.
 
 -- dp_deliveries: UNIQUE (customer_id, date, rider_id) WHERE is_adjustment = false
 -- This prevents double-billing for the same customer on the same day by the same rider.
 -- Legitimate adjustments are excluded.
-ALTER TABLE dp_deliveries 
-ADD CONSTRAINT unique_delivery_per_day 
-UNIQUE (customer_id, date, rider_id) 
+CREATE UNIQUE INDEX IF NOT EXISTS unique_delivery_per_day
+ON dp_deliveries (customer_id, date, rider_id)
 WHERE (is_adjustment = false AND deleted = false);
 
 -- dp_closing_records: UNIQUE (rider_id, date)
 -- Prevents a rider from submitting two closing reports for the same day.
-ALTER TABLE dp_closing_records 
-ADD CONSTRAINT unique_closing_per_day 
-UNIQUE (rider_id, date)
+CREATE UNIQUE INDEX IF NOT EXISTS unique_closing_per_day
+ON dp_closing_records (rider_id, date)
 WHERE (deleted = false);
 
 -- dp_rider_loads: UNIQUE (rider_id, date)
 -- Prevents duplicate morning load entries for the same rider on the same day.
-ALTER TABLE dp_rider_loads 
-ADD CONSTRAINT unique_load_per_day 
-UNIQUE (rider_id, date)
+CREATE UNIQUE INDEX IF NOT EXISTS unique_load_per_day
+ON dp_rider_loads (rider_id, date)
 WHERE (deleted = false);

@@ -7,6 +7,7 @@ export const wholesaleDataService = {
       const { data, error } = await supabase
         .from('ws_wholesale_customers')
         .select('*')
+        .eq('deleted', false)
         .order('name');
       if (error) throw error;
       return data || [];
@@ -20,7 +21,12 @@ export const wholesaleDataService = {
     try {
       const { data, error } = await supabase
         .from('ws_wholesale_customers')
-        .upsert(customer)
+        .upsert({
+          ...customer,
+          deleted: false,
+          updated_at: new Date().toISOString(),
+          version: (customer.version || 0) + 1
+        })
         .select()
         .single();
       if (error) throw error;
@@ -36,6 +42,7 @@ export const wholesaleDataService = {
       const { data, error } = await supabase
         .from('ws_products')
         .select('*')
+        .eq('deleted', false)
         .order('name');
       if (error) throw error;
       return data || [];
@@ -46,10 +53,16 @@ export const wholesaleDataService = {
   },
 
   async saveDeliveryEntries(entries: WSDelivery[]): Promise<WSDelivery[] | null> {
-    const payload = entries.map(entry => ({
-      ...entry,
-      total_amount: entry.quantity * entry.rate
-    }));
+    const payload = entries.map(entry => {
+      const payloadEntry = { ...entry };
+      delete payloadEntry.total_amount;
+      return {
+        ...payloadEntry,
+        deleted: false,
+        updated_at: new Date().toISOString(),
+        version: (entry.version || 0) + 1
+      };
+    });
 
     try {
       const { data, error } = await supabase
@@ -68,7 +81,13 @@ export const wholesaleDataService = {
     try {
       const { data, error } = await supabase
         .from('ws_payments')
-        .upsert(payment)
+        .upsert({
+          ...payment,
+          client_request_id: payment.client_request_id || payment.id,
+          deleted: false,
+          updated_at: new Date().toISOString(),
+          version: (payment.version || 0) + 1
+        })
         .select()
         .single();
       if (error) throw error;
@@ -90,7 +109,10 @@ export const wholesaleDataService = {
       return false;
     }
     try {
-      const { error } = await supabase.from('ws_deliveries').delete().eq('id', id);
+      const { error } = await supabase
+        .from('ws_deliveries')
+        .update({ deleted: true, updated_at: new Date().toISOString() })
+        .eq('id', id);
       if (error) throw error;
       return true;
     } catch (err) {
@@ -105,7 +127,10 @@ export const wholesaleDataService = {
       return false;
     }
     try {
-      const { error } = await supabase.from('ws_payments').delete().eq('id', id);
+      const { error } = await supabase
+        .from('ws_payments')
+        .update({ deleted: true, updated_at: new Date().toISOString() })
+        .eq('id', id);
       if (error) throw error;
       return true;
     } catch (err) {
@@ -116,8 +141,8 @@ export const wholesaleDataService = {
 
   async fetchLedger(customerId?: string, fromDate?: string, toDate?: string): Promise<WSLedgerEntry[]> {
     try {
-      let delQuery = supabase.from('ws_deliveries').select('*, ws_products(name)');
-      let payQuery = supabase.from('ws_payments').select('*');
+      let delQuery = supabase.from('ws_deliveries').select('*, ws_products(name)').eq('deleted', false);
+      let payQuery = supabase.from('ws_payments').select('*').eq('deleted', false);
 
       if (customerId) {
         delQuery = delQuery.eq('customer_id', customerId);
@@ -182,6 +207,7 @@ export const wholesaleDataService = {
         .from('ws_wholesale_customers')
         .select('opening_balance')
         .eq('id', customerId)
+        .eq('deleted', false)
         .single();
       
       if (custErr) throw custErr;
@@ -189,14 +215,16 @@ export const wholesaleDataService = {
       const { data: deliveries, error: delErr } = await supabase
         .from('ws_deliveries')
         .select('total_amount, quantity, rate')
-        .eq('customer_id', customerId);
+        .eq('customer_id', customerId)
+        .eq('deleted', false);
       
       if (delErr) throw delErr;
 
       const { data: payments, error: payErr } = await supabase
         .from('ws_payments')
         .select('amount')
-        .eq('customer_id', customerId);
+        .eq('customer_id', customerId)
+        .eq('deleted', false);
       
       if (payErr) throw payErr;
 
@@ -220,9 +248,9 @@ export const wholesaleDataService = {
     try {
       const today = new Date().toISOString().split('T')[0];
       
-      const { data: customers } = await supabase.from('ws_wholesale_customers').select('*').eq('active', true);
-      const { data: deliveries } = await supabase.from('ws_deliveries').select('*, ws_products(name)');
-      const { data: payments } = await supabase.from('ws_payments').select('*');
+      const { data: customers } = await supabase.from('ws_wholesale_customers').select('*').eq('active', true).eq('deleted', false);
+      const { data: deliveries } = await supabase.from('ws_deliveries').select('*, ws_products(name)').eq('deleted', false);
+      const { data: payments } = await supabase.from('ws_payments').select('*').eq('deleted', false);
 
       const balances = new Map<string, number>();
       let totalOutstanding = 0;
@@ -269,17 +297,18 @@ export const wholesaleDataService = {
     }
   },
 
-  async getNextInvoiceNumber(): Promise<string> {
+  async getNextInvoiceNumber(): Promise<string | null> {
     try {
       const { data, error } = await supabase.rpc('get_next_invoice_number');
       
       if (error) throw error;
+      if (typeof data !== 'number') throw new Error('Invoice counter did not return a number');
       
       const invoiceNumber = data as number;
       return `INV-${invoiceNumber.toString().padStart(4, '0')}`;
     } catch (err) {
       console.error('Error getting invoice number:', err);
-      return `INV-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+      return null;
     }
   }
 };

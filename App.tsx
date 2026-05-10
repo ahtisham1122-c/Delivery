@@ -7,7 +7,7 @@ import {
   UserX, Zap, BarChart3, MessageCircle, Home, MoreHorizontal, Wallet, Warehouse, ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { supabase, isCloudConnected, testConnection } from './services/supabaseClient';
+import { supabase, isCloudConnected, testConnection, setAppSessionToken, clearAppSessionToken } from './services/supabaseClient';
 import {
   Customer, Rider, Delivery, Payment, PriceRecord, Expense,
   UserRole, RiderLoad, RiderClosingRecord, MonthlyArchive, AuditLog, BaseEntity,
@@ -34,7 +34,7 @@ const explainSupabaseError = (err: any): string => {
   }
   return msg || 'Unknown error.';
 };
-import { getStoredData, saveToStore, generateId } from './services/dataStore';
+import { getStoredData, saveToStore, generateId, clearBusinessCache } from './services/dataStore';
 import { relationalDataService } from './services/relationalDataService';
 
 // Components
@@ -46,7 +46,6 @@ import StaffManagement from './components/StaffManagement';
 import ExpenseManagement from './components/ExpenseManagement';
 import Reports from './components/Ledger';
 import RiderClosing from './components/RiderClosing';
-import ArchiveManager from './components/ArchiveManager';
 import DispatchHub from './components/DispatchHub';
 import BillingTracker from './components/BillingTracker';
 import DailyLog from './components/DailyLog';
@@ -66,6 +65,7 @@ import RiderFilterBar from './components/RiderFilterBar';
 
 
 let storageWarningShownThisSession = false;
+const CACHE_MARKER_KEY = 'dairypro_cache_marker';
 
 const checkStorageHealth = async (): Promise<{
   isLow: boolean;
@@ -154,15 +154,6 @@ const App: React.FC = () => {
     }, 600);
   }, [refreshServerBalances]);
   
-  const parseDateParts = (dateStr: string) => {
-    const parts = (dateStr || '').substring(0, 10).split('-');
-    return {
-      year: parseInt(parts[0], 10) || 0,
-      month: (parseInt(parts[1], 10) || 1) - 1, // 0-indexed month
-      day: parseInt(parts[2], 10) || 0
-    };
-  };
-  
   
 
 
@@ -231,8 +222,8 @@ const App: React.FC = () => {
     return result;
   }, [customers, deliveries, payments, serverBalances]);
 
-  const fetchCloudData = useCallback(async () => {
-    if (!isCloudConnected()) return;
+  const fetchCloudData = useCallback(async (): Promise<boolean> => {
+    if (!isCloudConnected()) return false;
     setSyncing(true);
     setIntegrityStatus('syncing');
     try {
@@ -283,10 +274,12 @@ const App: React.FC = () => {
       
       setIntegrityStatus('verified');
       setSyncing(false, new Date().toLocaleTimeString());
+      return true;
     } catch (err) {
       console.error('fetchCloudData error:', err);
       setIntegrityStatus('conflict');
       setSyncing(false);
+      return false;
     }
   }, [setSyncing]);
 
@@ -298,6 +291,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const timeoutId = setTimeout(() => {
+      if (!currentUser) return;
       saveToStore('customers', customers);
       saveToStore('riders', riders);
       saveToStore('deliveries', deliveries);
@@ -308,7 +302,7 @@ const App: React.FC = () => {
       // Large records never touch localStorage
     }, 300);
     return () => clearTimeout(timeoutId);
-  }, [customers, riders, deliveries, payments, prices, expenses, riderLoads]);
+  }, [currentUser, customers, riders, deliveries, payments, prices, expenses, riderLoads]);
 
   // Phase 2 (2026-05-09): month-close is now ATOMIC via the
   // close_month_transactional Postgres function. The previous client-side
@@ -321,6 +315,8 @@ const App: React.FC = () => {
   //   3) call close_month_transactional which runs everything in a single
   //      Postgres transaction. Either it ALL succeeds or NOTHING changes.
   //   4) re-fetch from the cloud so every device sees identical state.
+  // Kept as dormant emergency code only; there is no user-facing archive/month-close action.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const onCloseMonth = useCallback(async (year: number, month: number) => {
     const monthName = new Date(year, month).toLocaleString('default', { month: 'long' });
 
@@ -395,6 +391,7 @@ const App: React.FC = () => {
     }
   }, [currentUser, fetchCloudData]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const reconcileBalancesWithArchives = useCallback(async () => {
     if (!archives || archives.length === 0) {
       alert("No archives found to reconcile with.");
@@ -463,55 +460,32 @@ const App: React.FC = () => {
       const timestamp = new Date().toISOString();
       const date = timestamp.split('T')[0];
       const id = generateId();
-
-      if (adj.type === 'DEBIT') {
-        const newDelivery: Delivery = {
+      const { data, error } = await supabase.rpc('save_manual_adjustment', {
+        p_adjustment: relationalDataService.toSnakeCase({
           id,
+          auditId: generateId(),
           customerId: adj.customerId,
+          type: adj.type,
+          amount: Math.round(Math.abs(adj.amount) * 100) / 100,
           date,
-          liters: 0,
-          priceAtTime: 0,
-          totalAmount: adj.amount,
-          riderId: 'system',
-          isLocked: false,
-          isAdjustment: true,
-          adjustmentNote: adj.note,
-          updatedAt: timestamp,
-          version: 1
-        };
-        const { error } = await supabase.from('dp_deliveries').upsert(relationalDataService.toSnakeCase(newDelivery));
-        if (error) throw error;
-        setDeliveries(prev => [...prev, newDelivery]);
-      } else {
-        const newPayment: Payment = {
-          id,
-          customerId: adj.customerId,
-          date,
-          amount: adj.amount,
+          note: adj.note,
           mode: PaymentMode.CASH,
-          isAdjustment: true,
-          adjustmentNote: adj.note,
-          updatedAt: timestamp,
-          version: 1
-        };
-        const { error } = await supabase.from('dp_payments').upsert(relationalDataService.toSnakeCase(newPayment));
-        if (error) throw error;
-        setPayments(prev => [...prev, newPayment]);
+          adjustmentTag: 'MANUAL_ADJUSTMENT',
+          clientRequestId: id
+        })
+      });
+      if (error) throw error;
+      if (!data?.entry) throw new Error('Adjustment was not confirmed by server.');
+
+      const entryKind = data.entry_kind as 'Delivery' | 'Payment';
+      if (entryKind === 'Delivery') {
+        setDeliveries(prev => [...prev, relationalDataService.toCamelCase(data.entry) as Delivery]);
+      } else {
+        setPayments(prev => [...prev, relationalDataService.toCamelCase(data.entry) as Payment]);
       }
-      
-      const auditEntry: AuditLog = {
-        id: generateId(),
-        action: 'CREATE',
-        entityId: id,
-        entityType: adj.type === 'DEBIT' ? 'Delivery' : 'Payment',
-        performedBy: currentUser.id,
-        timestamp: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        version: 1,
-        newValue: { type: 'MANUAL_ADJUSTMENT', ...adj }
-      };
-      await supabase.from('dp_audit_logs').upsert(relationalDataService.toSnakeCase(auditEntry));
-      setAuditLogs(prev => [...prev, auditEntry]);
+      if (data.audit) {
+        setAuditLogs(prev => [...prev, relationalDataService.toCamelCase(data.audit) as AuditLog]);
+      }
 
       alert(`Success: ${adj.type} adjustment of Rs. ${adj.amount} recorded.`);
     } catch (err) {
@@ -658,8 +632,6 @@ const App: React.FC = () => {
           return;
         }
 
-        await fetchCloudDataRef.current();
-
         setIntegrityStatus('verified');
       } catch (err) {
         console.error('Startup error:', err);
@@ -682,14 +654,38 @@ const App: React.FC = () => {
       if (error) throw error;
       
       if (data && data.success) {
+        if (!data.token) {
+          throw new Error('Login succeeded without a server session token.');
+        }
+        setAppSessionToken(data.token);
+        const cacheMarker = await relationalDataService.getCacheMarker();
+        if (localStorage.getItem(CACHE_MARKER_KEY) !== cacheMarker) {
+          clearBusinessCache();
+          setCustomers([]);
+          setRiders([]);
+          setDeliveries([]);
+          setPayments([]);
+          setPrices([]);
+          setExpenses([]);
+          setRiderLoads([]);
+          setClosingRecords([]);
+          setArchives([]);
+          setAuditLogs([]);
+          setServerBalances({});
+        }
+
+        const cloudLoaded = await fetchCloudData();
+        if (!cloudLoaded) {
+          throw new Error('Cloud data could not be loaded. Login blocked to prevent stale local ledger display.');
+        }
+        localStorage.setItem(CACHE_MARKER_KEY, cacheMarker);
+
         if (data.role === 'OWNER') {
-          setCurrentUser({ role: UserRole.OWNER }); 
-          await fetchCloudData(); 
+          setCurrentUser({ role: UserRole.OWNER });
           return;
         } else if (data.role === 'RIDER') {
           setCurrentUser({ role: UserRole.RIDER, id: data.id });
           setGlobalFilterRiderId(data.id);
-          await fetchCloudData();
           setActiveTab('milk');
           return;
         }
@@ -699,6 +695,8 @@ const App: React.FC = () => {
       setLoginError(true);
     } catch (err) { 
       console.error("Critical Login Error:", err);
+      clearAppSessionToken();
+      setCurrentUser(null);
       setLoginError(true); 
     } finally { 
       setIsLoggingIn(false); 
@@ -714,7 +712,11 @@ const App: React.FC = () => {
     setPayments(val);
   };
 
-  const performLogout = () => { setCurrentUser(null); setActiveTab('dashboard'); };
+  const performLogout = () => {
+    clearAppSessionToken();
+    setCurrentUser(null);
+    setActiveTab('dashboard');
+  };
   const openCalculatorWithCustomer = (customer: Customer) => { setCalcSelectedCustomer(customer); setIsCalcOpen(true); };
 
   const renderContent = () => {
@@ -745,7 +747,7 @@ const App: React.FC = () => {
         >
           {(() => {
             switch (activeTab) {
-              case 'dashboard': return <Dashboard customers={customers} deliveries={deliveries} payments={payments} expenses={expenses} riders={riders} lockedMonths={[]} onCloseMonth={onCloseMonth} role={currentUser.role} closingRecords={closingRecords} balances={balances} riderFilterId={globalFilterRiderId} setActiveTab={setActiveTab} onSelectRider={setGlobalFilterRiderId} />;
+              case 'dashboard': return <Dashboard customers={customers} deliveries={deliveries} payments={payments} expenses={expenses} riders={riders} role={currentUser.role} closingRecords={closingRecords} balances={balances} riderFilterId={globalFilterRiderId} setActiveTab={setActiveTab} onSelectRider={setGlobalFilterRiderId} />;
               case 'intelligence': return <SessionIntelligence riders={riders} customers={customers} deliveries={deliveries} payments={payments} riderLoads={riderLoads} role={currentUser.role} />;
               case 'milk': return <DeliveryEntry customers={customers} deliveries={deliveries} setDeliveries={handleSetDeliveries} prices={prices} riders={riders} payments={payments} setPayments={handleSetPayments} archives={archives} riderId={effectiveRiderId} role={currentUser.role} balances={balances} onOpenCalc={openCalculatorWithCustomer} riderLoads={riderLoads} setAuditLogs={setAuditLogs} />;
               case 'billing': return <BillingTracker customers={customers} payments={payments} setPayments={handleSetPayments} balances={balances} role={currentUser.role} riders={riders} riderFilterId={globalFilterRiderId} archives={archives} deliveries={deliveries} prices={prices} />;
@@ -753,7 +755,7 @@ const App: React.FC = () => {
               case 'audit': return <RiderClosing riders={riders} customers={customers} deliveries={deliveries} setDeliveries={handleSetDeliveries} payments={payments} setPayments={handleSetPayments} expenses={expenses} closingRecords={closingRecords} setClosingRecords={setClosingRecords} riderLoads={riderLoads} setRiderLoads={setRiderLoads} role={currentUser.role} setActiveTab={setActiveTab} riderFilterId={globalFilterRiderId} />;
               case 'expenses': return <ExpenseManagement expenses={expenses} setExpenses={setExpenses} riders={riders} role={currentUser.role} riderFilterId={globalFilterRiderId} archives={archives} />;
               case 'log': return <DailyLog deliveries={deliveries} payments={payments} customers={customers} riders={riders} riderFilterId={globalFilterRiderId} role={currentUser.role} />;
-              case 'ledger': return <Reports customers={customers} deliveries={deliveries} payments={payments} riders={riders} archives={archives} riderFilterId={globalFilterRiderId} auditLogs={auditLogs} onSyncArchives={reconcileBalancesWithArchives} onAddAdjustment={handleManualAdjustment} />;
+              case 'ledger': return <Reports customers={customers} deliveries={deliveries} payments={payments} riders={riders} archives={[]} riderFilterId={globalFilterRiderId} auditLogs={auditLogs} onAddAdjustment={handleManualAdjustment} />;
               case 'customers': return <CustomerManagement customers={customers} setCustomers={setCustomers} riders={riders} deliveries={deliveries} payments={payments} balances={balances} role={currentUser.role} riderFilterId={globalFilterRiderId} />;
               case 'analytics': return <Analytics customers={customers} deliveries={deliveries} payments={payments} riders={riders} riderFilterId={globalFilterRiderId} balances={balances} />;
               case 'insights': return <BusinessInsights archives={archives} deliveries={deliveries} payments={payments} customers={customers} riders={riders} riderFilterId={globalFilterRiderId} />;
@@ -766,7 +768,6 @@ const App: React.FC = () => {
                   <div className="p-8 space-y-8">
                     <StaffManagement riders={riders} setRiders={setRiders} role={currentUser.role} riderId={effectiveRiderId} customers={customers} balances={balances} />
                     <PriceManagement prices={prices} setPrices={setPrices} customers={customers} deliveries={deliveries} setDeliveries={handleSetDeliveries} />
-                    <ArchiveManager archives={archives} riders={riders} customers={customers} onCloseMonth={onCloseMonth} role={currentUser.role} />
                     <div className="bg-red-50 p-10 rounded-[3rem] border-4 border-red-100 flex flex-col items-center text-center gap-6">
                       <LogOut size={48} className="text-red-500" />
                       <button onClick={performLogout} className="w-full py-6 bg-red-600 text-white rounded-[2rem] font-black uppercase text-sm tracking-widest shadow-2xl active:scale-95 transition-all">Sign Out</button>
@@ -841,7 +842,7 @@ const App: React.FC = () => {
       {integrityStatus === 'warning' && currentUser.role === UserRole.OWNER && (
         <div className="bg-red-600 text-white px-4 py-3 text-xs font-bold flex flex-col gap-1 items-center justify-center text-center z-50">
           <span>CRITICAL STORAGE WARNING: Device storage is almost full.</span>
-          <span className="font-normal">Please go to Setup &gt; Archives and CLOSE the previous month immediately to prevent data loss.</span>
+          <span className="font-normal">Refresh cloud sync, download a backup, then clear local browser storage only after confirming the cloud data is current.</span>
         </div>
       )}
 
@@ -928,7 +929,7 @@ const App: React.FC = () => {
                     { id: 'ledger', label: 'Ledger', icon: ClipboardList },
                     { id: 'notTaken', label: 'Missing', icon: UserX },
                     { id: 'dailyUpdates', label: 'Updates', icon: MessageCircle },
-                    { id: 'customers', label: 'Clients', icon: Users },
+                    { id: 'customers', label: 'Customers', icon: Users },
                     { id: 'analytics', label: 'Trends', icon: Activity },
                     { id: 'finance', label: 'Finance', icon: Wallet },
                     { id: 'insights', label: 'Insights', icon: BarChart3 },

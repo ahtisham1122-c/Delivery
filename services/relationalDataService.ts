@@ -1,5 +1,22 @@
 import { supabase } from './supabaseClient';
-import { SyncPayload } from '../types';
+import { Delivery, Payment, SyncPayload } from '../types';
+
+const ENTRY_HISTORY_DAYS = 40;
+
+const toDateKey = (date: Date) => date.toLocaleDateString('en-CA');
+
+const daysAgo = (days: number) => {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  return toDateKey(date);
+};
+
+const addDays = (dateKey: string, days: number) => {
+  const date = new Date(`${dateKey}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return toDateKey(date);
+};
 
 /**
  * DairyPro PK - Relational Data Service
@@ -55,7 +72,7 @@ export const relationalDataService = {
         query = query.or(`version.gt.${sinceRevision},version.eq.0,version.is.null`);
       }
 
-      if (dateLimit && (tableName === 'dp_deliveries' || tableName === 'dp_payments')) {
+      if (dateLimit && ['dp_deliveries', 'dp_payments', 'dp_expenses', 'dp_rider_loads', 'dp_closing_records'].includes(tableName)) {
         query = query.gte('date', dateLimit);
       }
 
@@ -88,9 +105,7 @@ export const relationalDataService = {
    */
   async fetchBalancesFromServer(): Promise<Record<string, number>> {
     try {
-      const { data, error } = await supabase
-        .from('dp_customer_balances')
-        .select('customer_id, balance');
+      const { data, error } = await supabase.rpc('app_customer_balances');
       if (error) throw error;
       const balanceMap: Record<string, number> = {};
       (data || []).forEach(row => {
@@ -103,24 +118,110 @@ export const relationalDataService = {
     }
   },
 
+  async getCacheMarker(): Promise<string> {
+    const { data, error } = await supabase.rpc('get_app_cache_marker');
+    if (error) throw error;
+    return String(data || 'no-reset-marker');
+  },
+
+  unpackArchiveRow(archive: any) {
+    if (!archive?.payload) return archive;
+
+    const { payload: rawPayload, ...rest } = archive;
+    const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : rawPayload;
+    const camelPayload = {
+      ...payload,
+      deliveries: (payload.deliveries || []).map((row: any) => this.toCamelCase(row)),
+      payments: (payload.payments || []).map((row: any) => this.toCamelCase(row)),
+      expenses: (payload.expenses || []).map((row: any) => this.toCamelCase(row))
+    };
+
+    return { ...rest, ...camelPayload };
+  },
+
+  async getOpenLedgerDateLimit(): Promise<string | null> {
+    const { data, error } = await supabase
+      .from('dp_archives')
+      .select('year, month')
+      .eq('deleted', false)
+      .order('year', { ascending: false })
+      .order('month', { ascending: false })
+      .limit(1);
+
+    if (error || !data || data.length === 0) return null;
+
+    const latest = data[0];
+    return new Date(latest.year, latest.month + 1, 1).toLocaleDateString('en-CA');
+  },
+
+  getEntryHistoryDateLimit(): string {
+    return daysAgo(ENTRY_HISTORY_DAYS);
+  },
+
+  resolveOperationalDateLimit(openLedgerDateLimit: string | null): string {
+    const entryLimit = this.getEntryHistoryDateLimit();
+    if (!openLedgerDateLimit) return entryLimit;
+    return openLedgerDateLimit > entryLimit ? openLedgerDateLimit : entryLimit;
+  },
+
+  async fetchCustomerLedgerHistory(customerId: string, beforeDate: string, days: number = ENTRY_HISTORY_DAYS): Promise<{ deliveries: Delivery[]; payments: Payment[]; hasMore: boolean; fromDate: string }> {
+    const untilDate = addDays(beforeDate, -1);
+    const fromDate = addDays(untilDate, -(days - 1));
+
+    const [deliveryResult, paymentResult] = await Promise.all([
+      supabase
+        .from('dp_deliveries')
+        .select('*')
+        .eq('customer_id', customerId)
+        .or('deleted.eq.false,deleted.is.null')
+        .gte('date', fromDate)
+        .lte('date', untilDate)
+        .order('date', { ascending: false })
+        .order('updated_at', { ascending: false }),
+      supabase
+        .from('dp_payments')
+        .select('*')
+        .eq('customer_id', customerId)
+        .or('deleted.eq.false,deleted.is.null')
+        .gte('date', fromDate)
+        .lte('date', untilDate)
+        .order('date', { ascending: false })
+        .order('updated_at', { ascending: false })
+    ]);
+
+    if (deliveryResult.error) throw deliveryResult.error;
+    if (paymentResult.error) throw paymentResult.error;
+
+    const deliveries = (deliveryResult.data || []).map(row => this.toCamelCase(row)) as Delivery[];
+    const payments = (paymentResult.data || []).map(row => this.toCamelCase(row)) as Payment[];
+
+    return {
+      deliveries,
+      payments,
+      hasMore: deliveries.length > 0 || payments.length > 0,
+      fromDate
+    };
+  },
+
   /**
    * Fetches data from relational tables to populate the app state.
    * Supports delta sync if sinceRevision is provided.
    */
   async fetchAll(sinceRevision: number = 0): Promise<SyncPayload> {
-    const today = new Date();
-    today.setMonth(today.getMonth() - 1);
-    const firstDayStr = new Date(today.getFullYear(), today.getMonth(), 1).toLocaleDateString('en-CA');
+    const openLedgerDateLimit = await this.getOpenLedgerDateLimit();
+    const operationalDateLimit = this.resolveOperationalDateLimit(openLedgerDateLimit);
 
     const tables = [
       { key: 'riders', table: 'dp_riders', limit: null },
       { key: 'customers', table: 'dp_customers', limit: null },
       { key: 'prices', table: 'dp_prices', limit: null },
-      { key: 'deliveries', table: 'dp_deliveries', limit: firstDayStr },
-      { key: 'payments', table: 'dp_payments', limit: firstDayStr },
-      { key: 'expenses', table: 'dp_expenses', limit: firstDayStr },
-      { key: 'riderLoads', table: 'dp_rider_loads', limit: firstDayStr },
-      { key: 'closingRecords', table: 'dp_closing_records', limit: firstDayStr }
+      { key: 'deliveries', table: 'dp_deliveries', limit: operationalDateLimit },
+      { key: 'payments', table: 'dp_payments', limit: operationalDateLimit },
+      { key: 'expenses', table: 'dp_expenses', limit: operationalDateLimit },
+      { key: 'riderLoads', table: 'dp_rider_loads', limit: operationalDateLimit },
+      { key: 'closingRecords', table: 'dp_closing_records', limit: operationalDateLimit },
+      { key: 'archives', table: 'dp_archives', limit: null },
+      { key: 'auditLogs', table: 'dp_audit_logs', limit: null }
     ];
 
     const results = await Promise.all(
@@ -131,16 +232,17 @@ export const relationalDataService = {
     );
     
     const serverBalances: Record<string, number> = {};
-    try {
-      // Pass the firstDayStr to our RPC to get balances exactly as of that cutoff date
-      const { data, error } = await supabase.rpc('get_start_of_month_balances', { target_date: firstDayStr });
-      if (!error && data) {
-        data.forEach((row: any) => {
-          serverBalances[row.customer_id] = Math.round((row.balance || 0) * 100) / 100;
-        });
+    if (openLedgerDateLimit) {
+      try {
+        const { data, error } = await supabase.rpc('get_start_of_month_balances', { target_date: openLedgerDateLimit });
+        if (!error && data) {
+          data.forEach((row: any) => {
+            serverBalances[row.customer_id] = Math.round((row.balance || 0) * 100) / 100;
+          });
+        }
+      } catch {
+        console.warn("Failed to fetch server balances");
       }
-    } catch {
-      console.warn("Failed to fetch server balances");
     }
 
     const syncPayload: SyncPayload = {
@@ -160,14 +262,7 @@ export const relationalDataService = {
 
     results.forEach(({ key, data }) => {
       if (key === 'archives') {
-        syncPayload[key as keyof SyncPayload] = data.map((arc: any) => {
-          if (arc.payload) {
-            const { payload: arcPayload, ...rest } = arc;
-            const unpackedPayload = typeof arcPayload === 'string' ? JSON.parse(arcPayload) : arcPayload;
-            return { ...rest, ...unpackedPayload };
-          }
-          return arc;
-        });
+        syncPayload[key as keyof SyncPayload] = data.map((arc: any) => this.unpackArchiveRow(arc));
       } else {
         (syncPayload as any)[key] = data;
       }
