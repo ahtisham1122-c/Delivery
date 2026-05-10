@@ -582,125 +582,126 @@ const DeliveryEntry: React.FC<DeliveryEntryProps> = ({
       version: 1 // Never create records with version 0
     } : null;
 
-    // STEP A: Show "Saving..." spinner
+    // Phase 7 (2026-05-10): OPTIMISTIC SAVE.
+    // Old flow: spinner → await RPC (300-1500ms in PK) → update local state → advance cursor.
+    // For a rider entering 30 deliveries each morning, that 1s × 30 ate ~30s of typing time
+    // every day, and the screen felt frozen between taps.
+    //
+    // New flow: paint the saved row LOCALLY first, advance the cursor instantly, fire the RPC
+    // in the background. On success: replace the optimistic row with the server-confirmed row
+    // (so it picks up the real `linked_delivery_id`, server timestamps, etc.). On failure:
+    // roll back the optimistic state, surface the actual error, mark the row 'idle' again so
+    // the rider can retry.
+    //
+    // Safety nets that make this OK: the `save_delivery_entry` RPC is idempotent via
+    // `client_request_id` (Codex's May-09 work), so a stuck network never produces a
+    // duplicate. The realtime channel + Phase 4 server-balance refresh will sort everything
+    // within ~1s of the actual write landing.
+
+    // 1. Mark "saving" but DON'T block.
     setSyncStatuses(prev => ({ ...prev, [customer.id]: 'saving' }));
 
-    // STEP B: Write to Supabase through one atomic RPC FIRST.
-    // Delivery + same-screen cash payment must either both save or both fail.
-    let isCloudSuccess = false;
-    let cloudErrorMsg = '';
-    let savedDelivery: Delivery = deliveryObj;
-    let savedPayment: Payment | null = paymentObj;
-    try {
-      const { data, error } = await supabase.rpc('save_delivery_entry', {
-        p_delivery: relationalDataService.toSnakeCase(deliveryObj),
-        p_payment: paymentObj ? relationalDataService.toSnakeCase(paymentObj) : null
+    // 2. Update local state IMMEDIATELY so the UI reflects the entry.
+    setDeliveries(prev => {
+      const existingIdx = prev.findIndex(d =>
+        d.id === deliveryObj.id ||
+        (d.customerId === customer.id && d.date === selectedDate && d.riderId === customer.riderId && !d.isAdjustment)
+      );
+      if (existingIdx === -1) return [...prev, deliveryObj];
+      return prev.map((d, idx) => idx === existingIdx ? deliveryObj : d);
+    });
+    if (paymentObj) {
+      setPayments(prev => {
+        const existingIdx = prev.findIndex(p => p.id === paymentObj.id);
+        if (existingIdx === -1) return [...prev, paymentObj];
+        return prev.map((p, idx) => idx === existingIdx ? paymentObj : p);
       });
-      if (error) throw error;
-      if (data?.delivery) {
-        savedDelivery = relationalDataService.toCamelCase(data.delivery) as Delivery;
-      }
-      if (data?.payment) {
-        savedPayment = relationalDataService.toCamelCase(data.payment) as Payment;
-      } else {
-        savedPayment = null;
-      }
-      isCloudSuccess = true;
-    } catch (err: any) {
-      console.error("Cloud save failed:", err);
-      cloudErrorMsg = err?.message || String(err);
     }
 
-    // STEP C & D
-    if (isCloudSuccess) {
-      setSyncStatuses(prev => ({ ...prev, [customer.id]: 'saved' }));
-      
-      // Only update local state AFTER Supabase confirms success
-      setDeliveries(prev => {
-        const existingIndex = prev.findIndex(d => 
-          d.id === savedDelivery.id ||
-          (d.customerId === customer.id && d.date === selectedDate && d.riderId === customer.riderId && !d.isAdjustment)
-        );
-        if (existingIndex === -1) return [...prev, savedDelivery];
-        return prev.map((d, idx) => idx === existingIndex ? savedDelivery : d);
-      });
-      
-      setAuditLogs(prev => [...prev, {
-        id: generateId(),
-        action: 'CREATE',
-        entityId: savedDelivery.id,
-        entityType: 'Delivery',
-        performedBy: 'System',
-        timestamp: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        version: 1,
-        newValue: savedDelivery
-      }]);
-
-      if (savedPayment) {
-        setPayments(prev => {
-          const existingIndex = prev.findIndex(p => 
-            p.id === savedPayment!.id ||
-            (!!savedPayment!.linkedDeliveryId && p.linkedDeliveryId === savedPayment!.linkedDeliveryId)
-          );
-          if (existingIndex === -1) return [...prev, savedPayment!];
-          return prev.map((p, idx) => idx === existingIndex ? savedPayment! : p);
-        });
-
-        setAuditLogs(prev => [...prev, {
-          id: generateId(),
-          action: 'CREATE',
-          entityId: savedPayment.id,
-          entityType: 'Payment',
-          performedBy: 'System',
-          timestamp: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          version: 1,
-          newValue: savedPayment
-        }]);
-      }
-    } else {
-      // Cloud save failed — do NOT update local state
-      // Show clear error to user
-      setSyncStatuses(prev => ({ ...prev, [customer.id]: 'idle' }));
-      if (cloudErrorMsg.includes('Concurrency Conflict')) {
-        alert('RECORD ALREADY CHANGED: Another user modified this record. Please refresh the app to see the latest data.');
-      } else {
-        alert(
-          'SAVE FAILED: Entry was not saved to server.\n' +
-          'Please check your connection and try again.\n' +
-          'Do NOT close the app until you see the green tick.'
-        );
-      }
-      return; // Stop execution — do not proceed
-    }
-
-    // Clear inputs immediately
+    // 3. Clear inputs and advance the cursor RIGHT AWAY (was setTimeout 300ms).
     delete deliveryInputsRef.current[customer.id];
     delete cashInputsRef.current[customer.id];
     saveDrafts();
-
-    if (navigator.vibrate) {
-      navigator.vibrate([50, 50, 50]);
-    }
-
-    console.log(`Successfully saved entry for ${customer.name}`);
+    if (navigator.vibrate) navigator.vibrate(40);
 
     if (autoNext) {
-      setTimeout(() => {
-        const remainingPendingIdx = routeCustomers.findIndex((c, i) => 
-          i > currentIndex && !deliveries.some(d => d.customerId === c.id && d.date === selectedDate && !d.isAdjustment)
-        );
-        if (remainingPendingIdx !== -1) {
-          setCurrentIndex(remainingPendingIdx);
-        } else {
-          const wrapPendingIdx = routeCustomers.findIndex(c => 
-            !deliveries.some(d => d.customerId === c.id && d.date === selectedDate && !d.isAdjustment)
-          );
-          if (wrapPendingIdx !== -1) setCurrentIndex(wrapPendingIdx);
-        }
-      }, 300);
+      // Look at the LIVE deliveries snapshot (not the post-optimistic state) and
+      // also exclude the customer we just saved. Avoids landing on ourselves.
+      const hasEntry = (cid: string) => cid === customer.id ||
+        deliveries.some(d => d.customerId === cid && d.date === selectedDate && !d.isAdjustment && !d.deleted);
+      const nextIdx = routeCustomers.findIndex((c, i) => i > currentIndex && !hasEntry(c.id));
+      if (nextIdx !== -1) {
+        setCurrentIndex(nextIdx);
+      } else {
+        const wrapIdx = routeCustomers.findIndex(c => !hasEntry(c.id));
+        if (wrapIdx !== -1) setCurrentIndex(wrapIdx);
+      }
     }
+
+    // 4. Fire the actual RPC in the background. Don't await.
+    void (async () => {
+      try {
+        const { data, error } = await supabase.rpc('save_delivery_entry', {
+          p_delivery: relationalDataService.toSnakeCase(deliveryObj),
+          p_payment: paymentObj ? relationalDataService.toSnakeCase(paymentObj) : null
+        });
+        if (error) throw error;
+
+        // Replace the optimistic row with the server-confirmed one (real timestamps, links).
+        if (data?.delivery) {
+          const serverDelivery = relationalDataService.toCamelCase(data.delivery) as Delivery;
+          setDeliveries(prev => prev.map(d => d.id === deliveryObj.id ? serverDelivery : d));
+          setAuditLogs(prev => [...prev, {
+            id: generateId(),
+            action: 'CREATE',
+            entityId: serverDelivery.id,
+            entityType: 'Delivery',
+            performedBy: 'System',
+            timestamp: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            version: 1,
+            newValue: serverDelivery,
+          }]);
+        }
+        if (data?.payment) {
+          const serverPayment = relationalDataService.toCamelCase(data.payment) as Payment;
+          setPayments(prev => prev.map(p => p.id === (paymentObj?.id || '') ? serverPayment : p));
+          setAuditLogs(prev => [...prev, {
+            id: generateId(),
+            action: 'CREATE',
+            entityId: serverPayment.id,
+            entityType: 'Payment',
+            performedBy: 'System',
+            timestamp: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            version: 1,
+            newValue: serverPayment,
+          }]);
+        }
+        setSyncStatuses(prev => ({ ...prev, [customer.id]: 'saved' }));
+      } catch (err: any) {
+        // Roll back the optimistic local state and tell the user precisely why.
+        console.error('Cloud save failed (optimistic rollback):', err);
+        setDeliveries(prev => prev.filter(d => d.id !== deliveryObj.id));
+        if (paymentObj) {
+          setPayments(prev => prev.filter(p => p.id !== paymentObj.id));
+        }
+        setSyncStatuses(prev => ({ ...prev, [customer.id]: 'idle' }));
+
+        const msg = (err?.message || String(err) || '').toString();
+        let userMsg = '';
+        if (/Concurrency Conflict/i.test(msg)) {
+          userMsg = `SAVE FAILED for ${customer.name}: another device modified this record. Pull-to-refresh and re-enter.`;
+        } else if (/PERIOD_LOCKED/i.test(msg)) {
+          userMsg = `SAVE FAILED for ${customer.name}: this date is in a locked period. Use an Owner Adjustment instead.`;
+        } else if (/Failed to fetch|NetworkError|network/i.test(msg)) {
+          userMsg = `SAVE FAILED for ${customer.name}: no internet. Entry was reverted. Reconnect and re-enter.`;
+        } else {
+          userMsg = `SAVE FAILED for ${customer.name}: ${msg}\n\nThe entry has been reverted on this device.`;
+        }
+        alert(userMsg);
+      }
+    })();
   }, [deliveries, selectedDate, prices, routeCustomers, currentIndex, setDeliveries, setPayments, setAuditLogs, saveDrafts]);
 
   const handleApplyAdjustment = async (type: 'milk' | 'cash') => {

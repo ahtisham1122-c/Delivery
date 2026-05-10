@@ -1,0 +1,41 @@
+name: Daily backup
+
+# Phase 7 — nightly automated email backup.
+# Runs at 18:00 UTC = 23:00 PKT (Pakistan Standard Time, UTC+5).
+# Calls the export_daily_backup RPC via the Supabase service role key,
+# converts the result to CSV attachments, and emails them via Resend.
+#
+# Required GitHub repository secrets:
+#   - SUPABASE_URL
+#   - SUPABASE_SERVICE_ROLE_KEY   (NOT the anon key; bypasses RLS)
+#   - RESEND_API_KEY
+# Optional:
+#   - BACKUP_EMAIL_TO             (defaults to chahtisham11@gmail.com)
+
+on:
+  schedule:
+    - cron: '0 18 * * *'   # 18:00 UTC every day = 23:00 Asia/Karachi
+  workflow_dispatch:        # allow manual "Run workflow" from the Actions tab
+
+jobs:
+  send-backup:
+    name: Export and email today's backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Send daily backup email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          BACKUP_EMAIL_TO: ${{ secrets.BACKUP_EMAIL_TO }}
+        run: node scripts/send-daily-backup.mjs
