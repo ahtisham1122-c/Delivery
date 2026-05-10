@@ -210,3 +210,109 @@ Commit 4 must ship **with** the SQL applied in the same maintenance window. Docu
 ## Closing note
 
 This is good work in spirit and dangerous in delivery. The audit themes are real, the SQL is mostly competent, and the atomic delivery RPC alone is worth shipping. But the fact that two migration pairs were left as duplicates, the user-facing month-close was silently disabled, and login now hard-blocks on cloud failure tells me Codex didn't run a final review pass. Before this lands on a phone the owner uses to record real money, walk through the 5 questions in §8 and stage as 4 commits in §9.
+
+---
+
+## Update 2026-05-10: complete review of commit 94eb5f9
+
+Reviewer: Claude (Opus 4.7) | Commit: `94eb5f9` "Harden production ledger integrity and redesign ledger UI" | 53 files, +4,062 lines | Verified against final on-disk state.
+
+The original review (above) was written from the working tree before Codex pushed the May-10 follow-up batch. This section supersedes the original where they conflict.
+
+### Re-verification of original claims (against final commit state)
+
+1. **`ArchiveManager` removed from App.tsx?** — **YES, fully removed.** No imports, no `case 'archives'`, no Setup tile. Confirmed by grep returning no matches in `App.tsx`. The component file may still exist but is unmounted.
+2. **Login hard-blocks on first cloud-fetch failure?** — **YES, still present.** `App.tsx:677-680` throws `'Cloud data could not be loaded. Login blocked to prevent stale local ledger display.'` if `fetchCloudData()` returns false. Riders with flaky connectivity at 6am cannot enter the app.
+3. **`archives={[]}` hard-wired into Reports?** — **YES, still hard-wired.** `App.tsx:758`: `<Reports ... archives={[]} ...>`. Note that **every other consumer** (Dashboard, DeliveryEntry, BillingTracker, DispatchHub, ExpenseManagement, BusinessInsights, NotTakenToday) still receives the real `archives` prop — it is *only* `Reports` that is starved. This is almost certainly a bug, not policy: the Ledger screen lives inside Reports and now cannot resolve historical opening balances.
+4. **Phase 4 server-balance flow preserved?** — **YES.** `App.tsx:197-223` `balances` memo still prefers `serverBalances[c.id]`, falls back to client aggregation only when undefined. `relationalDataService.fetchBalancesFromServer` now routes through the new `app_customer_balances()` RPC — Phase 4 design intact.
+5. **`setAppSessionToken` / `clearAppSessionToken`?** — `services/supabaseClient.ts:11-31`. Token stored in `localStorage` under `dairypro_app_session_token`, injected as `x-app-session` header by a custom global `fetch`. `testConnection()` switched from `dp_metadata` SELECT to RPC `app_ping` (line 55). Clean. XSS exfiltration risk is unchanged from today's anon-key model.
+6. **Are the duplicate migrations really duplicates?**
+   - `live_integrity_guardrails.sql` (20 lines) creates `unique_*_per_day` indexes WITHOUT the `coalesce(...)` predicate. `production_financial_guardrails.sql` later **drops those exact indexes** and recreates them with `_live` suffix and `coalesce(...)` predicates that handle NULL flags safely. Confirmed: **`live_integrity_guardrails.sql` is fully superseded — running it before `production_financial_guardrails.sql` is wasted work but not harmful; running it after is wasted work AND leaves no observable effect.**
+   - `rpc_null_guard_fix.sql` and `guard_remaining_rpcs.sql` both re-issue `get_start_of_month_balances`, `live_reconcile`, and `get_next_invoice_number` with `IF app_has_session() IS NOT TRUE` checks. Bodies are functionally identical. Either one is sufficient; running both is harmless.
+
+### NEW migrations added in the May-10 batch (not in original review)
+
+All idempotent (CREATE OR REPLACE / IF NOT EXISTS / DROP TRIGGER IF EXISTS / NOTIFY pgrst). All require the May-09 app-session foundation (`app_has_session`, `app_is_owner`, `app_session_rider_id`).
+
+| Migration | Purpose (1-line) | Depends on | Risk | Locks/destroys data? |
+|---|---|---|---|---|
+| `20260510_reset_backup_table.sql` | Creates `dp_reset_backups (id, reason, payload, created_at)`, owner-only RLS SELECT. | `app_session_rls.sql` | **LOW** | No. New empty table. |
+| `20260510_app_cache_marker_rpc.sql` | `get_app_cache_marker()` returns `id:epoch` of latest `dp_reset_backups` row, or `'no-reset-marker'`. | `reset_backup_table.sql` | **LOW** | No. Read-only function. |
+| `20260510_verify_pin_rate_limit.sql` | Adds `pin_hash` and `request_ip` columns to `dp_login_attempts`; rewrites `verify_pin` to reject after 12 IP failures or 8 PIN-hash failures in 10 min. | `app_session_rls.sql` | **MEDIUM** | No. But: parses IP from `request.headers` JSON — if Supabase's reverse proxy doesn't forward `x-forwarded-for` exactly as expected, IP-based rate limiting silently degrades to PIN-only. Still, the PIN-hash rule alone (8/10min) is a real lockout. |
+| `20260510_atomic_adjustment_rpc.sql` | Owner-only `save_manual_adjustment(jsonb)` — writes the Delivery (DEBIT) or Payment (CREDIT) AND audit log row in one transaction. Validates positive amount, customer existence. | `app_session_rls.sql`, `atomic_standalone_payment_rpc.sql` (writes `client_request_id`) | **MEDIUM** | No. **Now wired**: `App.tsx:463`, `DeliveryEntry.tsx:764, 805`. |
+| `20260510_atomic_rider_closing_rpc.sql` | `save_rider_closing(jsonb)` — recomputes morning load / app deliveries / expected cash / expenses inside the RPC, inserts the closing row, and **locks every matching delivery row for that rider/date** (sets `is_locked=true`, bumps version). Rejects if a closing already exists or if route hasn't been dispatched. | `app_session_rls.sql`, `closed_day_write_guards.sql` (otherwise the lock UPDATE itself trips the closed-day trigger? — see risk note) | **HIGH** | **Yes — locks delivery rows.** Lock is set by UPDATE inside the same transaction as the INSERT into `dp_closing_records`. The closed-day trigger (next row) checks `EXISTS` on the closing record — at the moment of the UPDATE the record is being inserted in the same TX, so visibility is fine. **But**: the trigger also checks `coalesce(NEW.is_locked,false) = true` to skip locking-only updates — so this is safe by design. Wired at `RiderClosing.tsx:166`. |
+| `20260510_atomic_standalone_payment_rpc.sql` | Adds `client_request_id text` + partial unique index `unique_dp_payment_client_request_live`. New RPC `save_standalone_payment` checks for existing `client_request_id`, then for a 120-second-window dup (same customer/date/amount/mode/note/no-link). Rejects `is_adjustment=true` (must use adjustment RPC). | `app_session_rls.sql` | **MEDIUM-HIGH** | No, but: **adds a column + UNIQUE index on `dp_payments`**. Index is partial (`WHERE client_request_id IS NOT NULL`), so backfill is unnecessary; legacy rows without a request id are unaffected. Wired at `PaymentEntry.tsx:114`, `BillingTracker.tsx:257`. |
+| `20260510_closed_day_write_guards.sql` | Trigger `reject_writes_after_rider_closing` on `dp_deliveries / dp_payments / dp_expenses / dp_rider_loads`. After a closing exists for a rider/date, normal (non-adjustment, non-soft-delete) INSERT/UPDATE is rejected with `RIDER_DAY_ALREADY_CLOSED`. Adjustments and the rider-closing lock-only UPDATE are explicitly allowed through. | `app_session_rls.sql`, requires data hygiene (no orphan closings) | **HIGH** | **Real behavioural change.** After a rider closes the day, the only writes that succeed for that day are owner-only adjustments. **If any legacy closing record exists for a rider/date pair where you still need to back-edit deliveries, you cannot — you must soft-delete the closing first.** No way to back out other than `deleted=true` on the closing record. |
+| `20260510_delivery_entry_client_request_id.sql` | Re-issues `save_delivery_entry` to also propagate `client_request_id` on the linked payment row (so the payment partial-unique index from the standalone payment migration applies here too). | `atomic_delivery_entry_rpc.sql`, `atomic_standalone_payment_rpc.sql` (column must exist) | **LOW (positive)** | No. Pure replacement of function body. |
+| `20260510_expand_production_integrity_check.sql` | Replaces `production_integrity_check()` with 17 checks (was ~10). Adds: closed-day unlocked rows, recomputed closing mismatches, payments after rider close, missing client_request_id on non-adjustment payments, duplicate request-id groups, legacy negative/non-positive preserved counts (info-only). | `app_session_rls.sql`, all the May-10 RPC migrations (they create the columns/rows it queries) | **LOW** | No. Read-only owner-gated. |
+| `20260510_wholesale_financial_guardrails.sql` | Backfills `deleted/version/client_request_id` on all 4 `ws_*` tables. Adds partial unique index on `ws_payments(client_request_id)`. Trigger `reject_negative_wholesale_values` on `ws_deliveries / ws_payments / ws_products`. Sets `updated_at = now()` on every write. | None hard. | **MEDIUM** | **Yes, schema-level.** ALTER TABLE adds NOT NULL DEFAULT false on `deleted` / `version` — the DEFAULT covers existing rows. `updated_at = now()` is auto-set on every write, which means client-supplied `updated_at` values get overwritten — confirm this doesn't break any wholesale flows that rely on a specific `updated_at`. |
+| `20260510_wholesale_integrity_check_rpc.sql` | Owner-only `production_wholesale_integrity_check()` — 8 checks (orphans, null flags, negatives, duplicate request ids, missing request ids). | `app_session_rls.sql`, `wholesale_financial_guardrails.sql` | **LOW** | No. |
+
+### Conflicts with original review's claims
+
+- The original review said the "no client_request_id" was an unfixed audit item. The May-10 batch **fixed it** for both retail (`save_standalone_payment` + partial-unique index) and wholesale (`ws_payments.client_request_id`). Wired in `BillingTracker:248`, `PaymentEntry:106`, `DeliveryEntry:580`, `App.tsx:474`.
+- The original review treated the atomic delivery RPC as the only atomic write path. There are now **four**: `save_delivery_entry`, `save_standalone_payment`, `save_manual_adjustment`, `save_rider_closing`. All client write paths in the modified components route through them.
+- The original review noted "rider-closing and billing screens will still race." That's fixed: `RiderClosing.tsx:166`, `BillingTracker.tsx:257`.
+- The original review said `archives` and `auditLogs` are now pulled unbounded. Still true — un-rolled by May-10.
+- The original review's note that `vite.config.ts` still exposes `VITE_OWNER_PIN` is now stale: the May-10 commit **drops the `VITE_OWNER_PIN` define** (line removed). Fewer secret-leak vectors.
+
+### NEW per-file changes worth flagging (May-10 only)
+
+| File | What changed | Risk |
+|---|---|---|
+| `App.tsx:463` | `handleManualAdjustment` rewritten to call `save_manual_adjustment` RPC. Optimistic merge. | **MEDIUM**. Removes any client-side audit-log creation; relies on RPC to write atomic audit row. Good. |
+| `components/DeliveryEntry.tsx:580, 764, 805` | Generates `clientRequestId` (UUID) for both the linked payment AND owner adjustment paths. | **LOW**. Idempotent retries on flaky network. |
+| `components/PaymentEntry.tsx:106` | Switches to `save_standalone_payment` RPC, generates `clientRequestId`. | **LOW**. |
+| `components/BillingTracker.tsx:248, 257` | Switches the bulk-collect / single-tap payment writes to `save_standalone_payment`. | **LOW**. |
+| `components/RiderClosing.tsx:166` | Switches the daily closing button to `save_rider_closing` RPC. **No more client-side morning-load lookup; the RPC is now authoritative.** | **MEDIUM**. If client and server compute different totals for a borderline timezone-edge day, the screen may show one number and the database persists another. Verify with a real day-end run. |
+| `types.ts:78` | `Payment` gains `clientRequestId?: string`. | **LOW**. |
+| `types/wholesale.ts` | All 4 wholesale types gain `deleted/version`; `WSPayment` gains `client_request_id`. | **LOW**. |
+| `vite.config.ts` | Drops `VITE_OWNER_PIN` define. | **LOW (positive)**. |
+
+### Definitive run-order for ALL 25 new migrations (copy into Supabase SQL Editor in this order)
+
+Skip Phase 1/2/3 migrations if already applied. Run as Owner against a freshly backed-up DB. **Stop at the first failure** and reconcile before continuing.
+
+1. `20260313_add_unique_constraints.sql` — re-run only if the original (broken) version was never applied; the file is idempotent.
+2. `20260510_reset_backup_table.sql` — creates table referenced later.
+3. `20260509_app_session_rls.sql` — **foundational. After this point, current production clients without the new bundle are locked out.** Have the new React build ready to deploy in the same window.
+4. `20260509_app_session_crypto_schema_fix.sql` — **must run immediately**; otherwise login is broken (digest/gen_random_bytes lookup fails).
+5. `20260510_verify_pin_rate_limit.sql` — re-issues `verify_pin` again with rate limiting + IP tracking. **Run after the crypto fix or it errors on `extensions.digest`.**
+6. `20260509_split_write_rls_policies.sql` — replaces FOR ALL policies with INSERT/UPDATE/DELETE.
+7. `20260509_future_value_guards.sql` — installs negative-value rejection trigger. May fail if you have legacy negative active deliveries; if so, soft-delete or roll back and run #8 first.
+8. `20260509_value_guard_soft_delete_fix.sql` — patches the trigger to skip deleted rows. Run AFTER #7.
+9. `20260509_production_financial_guardrails.sql` — backfills NULL flags, drops/recreates partial unique indexes with `_live` suffix, reinstalls strict OCC trigger on 10 tables, **revokes EXECUTE on `close_month_transactional` / `preview_month_close`** (month-close UI is intentionally dormant).
+10. `20260509_atomic_delivery_entry_rpc.sql` — base `save_delivery_entry`.
+11. `20260510_atomic_standalone_payment_rpc.sql` — adds `dp_payments.client_request_id` + unique index + `save_standalone_payment` RPC. **Must run before #12 (which references the column).**
+12. `20260510_delivery_entry_client_request_id.sql` — replaces `save_delivery_entry` to also write `client_request_id` on the linked payment.
+13. `20260510_atomic_adjustment_rpc.sql` — `save_manual_adjustment`.
+14. `20260510_atomic_rider_closing_rpc.sql` — `save_rider_closing`.
+15. `20260510_closed_day_write_guards.sql` — triggers that block writes after a closing exists. **Verify no orphan closing records before running, or you will lock out legitimate edits.**
+16. `20260509_guard_remaining_rpcs.sql` — wraps the 3 remaining RPCs in session checks.
+17. `20260509_lock_vault_and_dormant_close.sql` — defensive RLS for `dairy_vault`, double-confirms close RPCs are revoked.
+18. `20260509_production_integrity_check_rpc.sql` — installs the read-only checklist function.
+19. `20260510_expand_production_integrity_check.sql` — replaces it with the 17-check version. **Run AFTER #11–#15 because it queries columns/rows they create.**
+20. `20260509_wholesale_performance_indexes.sql` — pure perf.
+21. `20260510_wholesale_financial_guardrails.sql` — wholesale columns + unique index + negative-value trigger.
+22. `20260510_wholesale_integrity_check_rpc.sql` — wholesale checklist. **Run AFTER #21 because it queries `client_request_id`.**
+23. `20260510_app_cache_marker_rpc.sql` — cache marker function.
+
+**Skip (redundant):**
+- `20260509_live_integrity_guardrails.sql` — fully superseded by #9.
+- `20260509_rpc_null_guard_fix.sql` — duplicate of #16. Either is fine; do not run both back-to-back.
+
+That's 23 to run, 2 to skip out of the 25 net-new files.
+
+### Updated verdict — YELLOW (with one clear fix needed before next deploy)
+
+The May-10 batch substantively addresses the biggest issues from the original review: **rider closing is now atomic and authoritative server-side, payments have idempotency keys, adjustments have an audit-paired RPC, closed-day writes are blocked at the DB level, integrity check is comprehensive, wholesale gets the same hardening, and PIN rate-limiting is real.** The atomic-write coverage went from "delivery only" to "every money write path." This is a meaningful upgrade.
+
+**The single must-fix before the owner relies on past-month numbers:** `App.tsx:758` still reads `archives={[]}`. Every other consumer gets real archives. The Ledger / Reports screen will silently compute wrong opening balances for any month earlier than the current operational window. Restore to `archives={archives}` (one-character fix). Without it, the Phase 4 server-balance correctness wins are partially undone in the most heavily-used view.
+
+**Other items worth resolving but not deploy-blocking:**
+- The login hard-block (`App.tsx:677-680`) is a UX regression for riders on flaky cellular. Consider downgrading to a banner that lets them proceed with cached data (and visibly mark the screen "OFFLINE — sync pending").
+- The owner has **no UI to close a month**. `close_month_transactional` is server-revoked and `ArchiveManager` is unmounted. If owner wants to close April or May, they will need a developer to either ship a new ArchiveManager or run SQL by hand. Ask the owner whether this is intentional.
+- `relationalDataService.fetchAll` still pulls `dp_archives` and `dp_audit_logs` unbounded on every cold start.
+- `closed_day_write_guards.sql` (#15) is irreversible-feeling: any orphan closing record will block legitimate edits. Recommend running `production_integrity_check()` BEFORE applying #15 and verifying `active_duplicate_closing_groups = 0`.
+
+The commit is in `main` and pushed — that is what it is. Treat the yellow flag as "before next deploy, fix the one-char `archives={[]}` bug and decide on the month-close UX." Do not run the 23 SQL migrations until you have a fresh JSON backup and the new build is ready to deploy in the same maintenance window.

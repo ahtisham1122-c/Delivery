@@ -4,7 +4,7 @@ import {
   Users, LogOut, Settings, ReceiptText, Activity, Scale,
   Loader2, Container, ClipboardList, CreditCard,
   Power, Fuel, X, Calculator,
-  UserX, Zap, BarChart3, MessageCircle, Home, MoreHorizontal, Wallet, Warehouse, ShieldCheck
+  UserX, Zap, BarChart3, MessageCircle, Home, MoreHorizontal, Wallet, Warehouse, ShieldCheck, Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase, isCloudConnected, testConnection, setAppSessionToken, clearAppSessionToken } from './services/supabaseClient';
@@ -62,6 +62,7 @@ import FinancialSummary from './components/FinancialSummary';
 import WholesaleHub from './components/wholesale/WholesaleHub';
 import LiveReconcile from './components/LiveReconcile';
 import RiderFilterBar from './components/RiderFilterBar';
+import PeriodLock from './components/PeriodLock';
 
 
 let storageWarningShownThisSession = false;
@@ -762,6 +763,7 @@ const App: React.FC = () => {
               case 'finance': return <FinancialSummary customers={customers} deliveries={deliveries} payments={payments} balances={balances} role={currentUser.role} />;
               case 'wholesale': return <WholesaleHub />;
               case 'reconcile': return <LiveReconcile customers={customers} balances={balances} role={currentUser.role} />;
+              case 'periodLock': return <PeriodLock role={currentUser.role} />;
               case 'notTaken': return <NotTakenToday customers={customers} deliveries={deliveries} riders={riders} riderFilterId={globalFilterRiderId} archives={archives} />;
               case 'dailyUpdates': return <DailyWhatsAppUpdates customers={customers} deliveries={deliveries} payments={payments} riders={riders} role={currentUser.role} riderFilterId={globalFilterRiderId} />;
               case 'setup': return (
@@ -935,6 +937,7 @@ const App: React.FC = () => {
                     { id: 'insights', label: 'Insights', icon: BarChart3 },
                     { id: 'wholesale', label: 'Wholesale', icon: Warehouse },
                     { id: 'reconcile', label: 'Reconcile', icon: ShieldCheck },
+                    { id: 'periodLock', label: 'Lock Period', icon: Lock },
                     { id: 'setup', label: 'Setup', icon: Settings },
                  ] : [{id: 'setup', label: 'Sign Out', icon: Power}]).map(item => (
                     <motion.button 
