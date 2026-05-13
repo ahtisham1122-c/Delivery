@@ -88,8 +88,16 @@ const WholesaleDeliveryEntry: React.FC = () => {
       total_amount: r.qty * r.rate
     }));
 
-    const saved = await wholesaleDataService.saveDeliveryEntries(entries);
-    
+    let saved: WSDelivery[] | null = null;
+    try {
+      saved = await wholesaleDataService.saveDeliveryEntries(entries);
+    } catch (err: any) {
+      alert('Failed to save delivery:\n\n' + (err?.message || String(err)));
+      setSyncStatus('idle');
+      setSaving(false);
+      return;
+    }
+
     if (saved) {
       setSuccess(true);
       setSyncStatus(navigator.onLine ? 'saved' : 'pending');

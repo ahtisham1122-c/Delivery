@@ -52,41 +52,46 @@ const WholesalePaymentEntry: React.FC = () => {
       note
     };
 
-    const saved = await wholesaleDataService.savePayment(payment);
-    
-    if (saved) {
-      setSuccess(true);
-      setSyncStatus(navigator.onLine ? 'saved' : 'pending');
-      
-      if (printReceipt) {
-        const customer = customers.find(c => c.id === customerId);
-        const balanceBefore = customerBalance || 0;
-        const balanceAfter = balanceBefore - Number(amount);
-        
-        wholesalePrintService.printWholesalePaymentThermal(
-          customer?.name || 'Unknown',
-          date,
-          Number(amount),
-          mode,
-          note,
-          balanceBefore,
-          balanceAfter
-        );
-      }
+    try {
+      const saved = await wholesaleDataService.savePayment(payment);
 
-      setTimeout(() => {
-        setSuccess(false);
+      if (saved) {
+        setSuccess(true);
+        setSyncStatus(navigator.onLine ? 'saved' : 'pending');
+
+        if (printReceipt) {
+          const customer = customers.find(c => c.id === customerId);
+          const balanceBefore = customerBalance || 0;
+          const balanceAfter = balanceBefore - Number(amount);
+
+          wholesalePrintService.printWholesalePaymentThermal(
+            customer?.name || 'Unknown',
+            date,
+            Number(amount),
+            mode,
+            note,
+            balanceBefore,
+            balanceAfter
+          );
+        }
+
+        setTimeout(() => {
+          setSuccess(false);
+          setSyncStatus('idle');
+          setAmount('');
+          setNote('');
+          setCustomerId('');
+          setCustomerBalance(null);
+        }, 2000);
+      } else {
+        alert('Failed to save payment (no response from server).');
         setSyncStatus('idle');
-        setAmount('');
-        setNote('');
-        setCustomerId('');
-        setCustomerBalance(null);
-      }, 2000);
-    } else {
-      alert('Failed to save payment.');
+      }
+    } catch (err: any) {
+      alert('Failed to save payment:\n\n' + (err?.message || String(err)));
       setSyncStatus('idle');
     }
-    
+
     setSaving(false);
   };
 

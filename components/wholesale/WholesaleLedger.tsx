@@ -185,8 +185,14 @@ const WholesaleLedger: React.FC = () => {
         note: editForm.note,
         total_amount: Number(editForm.quantity) * Number(editForm.rate)
       };
-      const res = await wholesaleDataService.saveDeliveryEntries([delivery]);
-      success = !!res;
+      try {
+        const res = await wholesaleDataService.saveDeliveryEntries([delivery]);
+        success = !!res;
+      } catch (err: any) {
+        alert('Failed to update delivery:\n\n' + (err?.message || String(err)));
+        setIsSaving(false);
+        return;
+      }
     } else {
       const payment: WSPayment = {
         id: editingEntry.id,
@@ -195,8 +201,14 @@ const WholesaleLedger: React.FC = () => {
         amount: Number(editForm.amount),
         note: editForm.note
       };
-      const res = await wholesaleDataService.savePayment(payment);
-      success = !!res;
+      try {
+        const res = await wholesaleDataService.savePayment(payment);
+        success = !!res;
+      } catch (err: any) {
+        alert('Failed to update payment:\n\n' + (err?.message || String(err)));
+        setIsSaving(false);
+        return;
+      }
     }
 
     if (success) {
@@ -209,7 +221,7 @@ const WholesaleLedger: React.FC = () => {
       setLedger(data);
       setEditingEntry(null);
     } else {
-      alert('Failed to update entry');
+      alert('Failed to update entry (no response from server).');
     }
     setIsSaving(false);
   };

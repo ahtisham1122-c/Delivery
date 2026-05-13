@@ -22,14 +22,12 @@ export const wholesaleDataService = {
   // lock, idempotency, audit logging, and version OCC. RPCs handle all
   // four invariants on the server.
   async saveWholesaleCustomer(customer: WSCustomer): Promise<WSCustomer | null> {
-    try {
-      const { data, error } = await supabase.rpc('save_ws_customer', { p_customer: customer });
-      if (error) throw error;
-      return (data as any)?.customer || null;
-    } catch (err) {
-      console.error('Error saving wholesale customer to cloud:', err);
-      return null;
+    const { data, error } = await supabase.rpc('save_ws_customer', { p_customer: customer });
+    if (error) {
+      console.error('Error saving wholesale customer to cloud:', error);
+      throw new Error(error.message || 'Failed to save customer');
     }
+    return (data as any)?.customer || null;
   },
 
   async fetchAllProducts(): Promise<WSProduct[]> {
@@ -57,29 +55,25 @@ export const wholesaleDataService = {
         client_request_id: rest.client_request_id || rest.id || crypto.randomUUID(),
       };
     });
-    try {
-      const { data, error } = await supabase.rpc('save_ws_delivery_batch', { p_entries: payload });
-      if (error) throw error;
-      return ((data as any)?.results || []).map((r: any) => r.delivery as WSDelivery);
-    } catch (err) {
-      console.error('Error saving wholesale deliveries to cloud:', err);
-      return null;
+    const { data, error } = await supabase.rpc('save_ws_delivery_batch', { p_entries: payload });
+    if (error) {
+      console.error('Error saving wholesale deliveries to cloud:', error);
+      throw new Error(error.message || 'Failed to save delivery');
     }
+    return ((data as any)?.results || []).map((r: any) => r.delivery as WSDelivery);
   },
 
   async savePayment(payment: WSPayment): Promise<WSPayment | null> {
-    try {
-      const payload = {
-        ...payment,
-        client_request_id: payment.client_request_id || payment.id || crypto.randomUUID(),
-      };
-      const { data, error } = await supabase.rpc('save_ws_payment', { p_payment: payload });
-      if (error) throw error;
-      return (data as any)?.payment || null;
-    } catch (err) {
-      console.error('Error saving wholesale payment to cloud:', err);
-      return null;
+    const payload = {
+      ...payment,
+      client_request_id: payment.client_request_id || payment.id || crypto.randomUUID(),
+    };
+    const { data, error } = await supabase.rpc('save_ws_payment', { p_payment: payload });
+    if (error) {
+      console.error('Error saving wholesale payment to cloud:', error);
+      throw new Error(error.message || 'Failed to save payment');
     }
+    return (data as any)?.payment || null;
   },
 
   // Phase 2 fix (2026-05-09): the previous offline-fallback called an

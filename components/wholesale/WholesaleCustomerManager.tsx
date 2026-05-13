@@ -58,18 +58,22 @@ const WholesaleCustomerManager: React.FC = () => {
 
     setSaving(true);
     setSyncStatus('saving');
-    const saved = await wholesaleDataService.saveWholesaleCustomer(formData as WSCustomer);
-    
-    if (saved) {
-      setSyncStatus(navigator.onLine ? 'saved' : 'pending');
-      setTimeout(() => {
-        setEditingId(null);
-        setFormData({});
+    try {
+      const saved = await wholesaleDataService.saveWholesaleCustomer(formData as WSCustomer);
+      if (saved) {
+        setSyncStatus(navigator.onLine ? 'saved' : 'pending');
+        setTimeout(() => {
+          setEditingId(null);
+          setFormData({});
+          setSyncStatus('idle');
+          loadCustomers();
+        }, 500);
+      } else {
+        alert('Failed to save customer (no response from server).');
         setSyncStatus('idle');
-        loadCustomers();
-      }, 500);
-    } else {
-      alert('Failed to save customer.');
+      }
+    } catch (err: any) {
+      alert('Failed to save customer:\n\n' + (err?.message || String(err)));
       setSyncStatus('idle');
     }
     setSaving(false);
@@ -78,11 +82,16 @@ const WholesaleCustomerManager: React.FC = () => {
   const handleToggleActive = async (customer: WSCustomer) => {
     setSyncStatus('saving');
     const updated = { ...customer, active: !customer.active };
-    const saved = await wholesaleDataService.saveWholesaleCustomer(updated);
-    if (saved) {
-      setSyncStatus(navigator.onLine ? 'saved' : 'pending');
-      setTimeout(() => setSyncStatus('idle'), 500);
-    } else {
+    try {
+      const saved = await wholesaleDataService.saveWholesaleCustomer(updated);
+      if (saved) {
+        setSyncStatus(navigator.onLine ? 'saved' : 'pending');
+        setTimeout(() => setSyncStatus('idle'), 500);
+      } else {
+        setSyncStatus('idle');
+      }
+    } catch (err: any) {
+      alert('Failed to toggle customer:\n\n' + (err?.message || String(err)));
       setSyncStatus('idle');
     }
     loadCustomers();
