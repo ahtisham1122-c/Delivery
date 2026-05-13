@@ -17,20 +17,15 @@ export const wholesaleDataService = {
     }
   },
 
+  // Phase 9 (2026-05-13): all wholesale writes go through atomic RPCs
+  // matching the retail pattern. The old bare upserts skipped period
+  // lock, idempotency, audit logging, and version OCC. RPCs handle all
+  // four invariants on the server.
   async saveWholesaleCustomer(customer: WSCustomer): Promise<WSCustomer | null> {
     try {
-      const { data, error } = await supabase
-        .from('ws_wholesale_customers')
-        .upsert({
-          ...customer,
-          deleted: false,
-          updated_at: new Date().toISOString(),
-          version: (customer.version || 0) + 1
-        })
-        .select()
-        .single();
+      const { data, error } = await supabase.rpc('save_ws_customer', { p_customer: customer });
       if (error) throw error;
-      return data;
+      return (data as any)?.customer || null;
     } catch (err) {
       console.error('Error saving wholesale customer to cloud:', err);
       return null;
@@ -53,24 +48,19 @@ export const wholesaleDataService = {
   },
 
   async saveDeliveryEntries(entries: WSDelivery[]): Promise<WSDelivery[] | null> {
+    if (!entries || entries.length === 0) return [];
+    // Generated `total_amount` column is computed server-side; strip it.
     const payload = entries.map(entry => {
-      const payloadEntry = { ...entry };
-      delete payloadEntry.total_amount;
+      const { total_amount, ...rest } = entry as any;
       return {
-        ...payloadEntry,
-        deleted: false,
-        updated_at: new Date().toISOString(),
-        version: (entry.version || 0) + 1
+        ...rest,
+        client_request_id: rest.client_request_id || rest.id || crypto.randomUUID(),
       };
     });
-
     try {
-      const { data, error } = await supabase
-        .from('ws_deliveries')
-        .upsert(payload)
-        .select();
+      const { data, error } = await supabase.rpc('save_ws_delivery_batch', { p_entries: payload });
       if (error) throw error;
-      return data;
+      return ((data as any)?.results || []).map((r: any) => r.delivery as WSDelivery);
     } catch (err) {
       console.error('Error saving wholesale deliveries to cloud:', err);
       return null;
@@ -79,19 +69,13 @@ export const wholesaleDataService = {
 
   async savePayment(payment: WSPayment): Promise<WSPayment | null> {
     try {
-      const { data, error } = await supabase
-        .from('ws_payments')
-        .upsert({
-          ...payment,
-          client_request_id: payment.client_request_id || payment.id,
-          deleted: false,
-          updated_at: new Date().toISOString(),
-          version: (payment.version || 0) + 1
-        })
-        .select()
-        .single();
+      const payload = {
+        ...payment,
+        client_request_id: payment.client_request_id || payment.id || crypto.randomUUID(),
+      };
+      const { data, error } = await supabase.rpc('save_ws_payment', { p_payment: payload });
       if (error) throw error;
-      return data;
+      return (data as any)?.payment || null;
     } catch (err) {
       console.error('Error saving wholesale payment to cloud:', err);
       return null;
@@ -109,12 +93,9 @@ export const wholesaleDataService = {
       return false;
     }
     try {
-      const { error } = await supabase
-        .from('ws_deliveries')
-        .update({ deleted: true, updated_at: new Date().toISOString() })
-        .eq('id', id);
+      const { data, error } = await supabase.rpc('soft_delete_ws_delivery', { p_id: id });
       if (error) throw error;
-      return true;
+      return !!(data as any)?.success;
     } catch (err) {
       console.error('Error deleting wholesale delivery from cloud:', err);
       return false;
@@ -127,12 +108,9 @@ export const wholesaleDataService = {
       return false;
     }
     try {
-      const { error } = await supabase
-        .from('ws_payments')
-        .update({ deleted: true, updated_at: new Date().toISOString() })
-        .eq('id', id);
+      const { data, error } = await supabase.rpc('soft_delete_ws_payment', { p_id: id });
       if (error) throw error;
-      return true;
+      return !!(data as any)?.success;
     } catch (err) {
       console.error('Error deleting wholesale payment from cloud:', err);
       return false;

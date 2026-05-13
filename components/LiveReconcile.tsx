@@ -12,7 +12,7 @@
 
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Loader2, ShieldCheck, AlertTriangle, RefreshCcw } from 'lucide-react';
+import { Loader2, ShieldCheck, AlertTriangle, RefreshCcw, Activity, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { formatPKR } from '../services/dataStore';
 import { Customer, UserRole } from '../types';
@@ -39,6 +39,26 @@ const LiveReconcile: React.FC<LiveReconcileProps> = ({ customers, balances, role
   const [rows, setRows] = useState<DriftRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastChecked, setLastChecked] = useState<string | null>(null);
+
+  // Phase 9 health-check state (server-side invariants probe).
+  const [healthRunning, setHealthRunning] = useState(false);
+  const [health, setHealth] = useState<any | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  const runHealthCheck = async () => {
+    setHealthRunning(true);
+    setHealthError(null);
+    setHealth(null);
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('financial_health_check');
+      if (rpcErr) throw rpcErr;
+      setHealth(data);
+    } catch (err: any) {
+      setHealthError(err?.message || 'Health check failed.');
+    } finally {
+      setHealthRunning(false);
+    }
+  };
 
   if (role !== UserRole.OWNER) {
     return (
@@ -125,6 +145,54 @@ const LiveReconcile: React.FC<LiveReconcileProps> = ({ customers, balances, role
           <p className="text-xs text-slate-500 mt-2">{totalCustomers} customers checked. No drift detected on this device.</p>
         </div>
       )}
+
+      {/* Phase 9: Financial Health Check — server-side invariants probe.
+          Different from Live Reconcile (which compares this device to server).
+          This runs eight finance-critical invariants and shows pass/fail. */}
+      <div className="bg-white rounded-3xl border-4 border-slate-100 p-6 no-print">
+        <div className="flex items-start gap-3 mb-4">
+          <Activity className="text-emerald-600 flex-shrink-0" size={26} />
+          <div className="flex-1">
+            <h2 className="text-lg font-black uppercase tracking-tighter text-slate-900">Financial Health Check</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Server-side invariants probe — detects negative amounts, orphan rows, duplicate request-ids, free-milk rows (liters but no price), etc. Read-only.
+            </p>
+          </div>
+        </div>
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={runHealthCheck}
+          disabled={healthRunning}
+          className="w-full py-3 rounded-2xl bg-emerald-600 text-white font-black uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          {healthRunning ? <Loader2 className="animate-spin" size={16} /> : <Activity size={16} />}
+          {healthRunning ? 'Running…' : 'Run 8 invariant checks'}
+        </motion.button>
+        {healthError && (
+          <p className="text-[11px] text-red-600 mt-3 font-mono break-all">{healthError}</p>
+        )}
+        {health && (
+          <div className="mt-4 space-y-1.5">
+            <div className={`rounded-xl p-3 text-xs font-black uppercase tracking-widest text-center ${
+              health.all_ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+            }`}>
+              {health.all_ok
+                ? `All ${health.passed} checks passed`
+                : `${health.failed} of ${health.passed + health.failed} checks failed`}
+            </div>
+            {(health.checks || []).map((c: any) => (
+              <div key={c.check} className={`flex items-start gap-2 text-xs p-2 rounded-lg ${c.ok ? 'bg-slate-50' : 'bg-red-50'}`}>
+                {c.ok ? <CheckCircle size={14} className="text-green-600 flex-shrink-0 mt-0.5" />
+                      : <XCircle size={14} className="text-red-600 flex-shrink-0 mt-0.5" />}
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-slate-800">{c.check.replace(/_/g, ' ')}</p>
+                  <p className={`text-[10px] mt-0.5 ${c.ok ? 'text-slate-500' : 'text-red-700'}`}>{c.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {rows && driftCount > 0 && (
         <div className="bg-white rounded-3xl border-4 border-amber-200 overflow-hidden">
