@@ -1,0 +1,21 @@
+-- Phase 10 bank-grade integrity (2026-05-13) — reference snapshot.
+-- Applied to project tmsvmyvktfatyyzqfmfv via MCP as three migrations:
+--   m10_bank_grade_audit_and_cash
+--   m11_audit_chain_sequence_hotfix
+--   m12_clean_test_audit_rows
+--
+-- Three additions:
+--   A. dp_audit_logs is now APPEND-ONLY (P0004 on UPDATE/DELETE) AND
+--      every row carries a sha256 hash chained to the previous entry.
+--      verify_audit_chain() recomputes the whole chain. Any direct
+--      database tamper is detected.
+--   B. dp_cash_settlements table — first-class record of "Owner
+--      received Rs. X from Rider Y on date Z". Computes variance vs
+--      expected_cash automatically. Idempotent + audit-logged via
+--      record_cash_settlement(jsonb).
+--   C. dp_closing_records gets variance + requires_review columns.
+--      save_rider_closing computes variance = physical - expected
+--      and flags requires_review when |variance| exceeds
+--      dp_metadata.closing_variance_threshold_rs (default Rs. 100).
+
+SELECT 'phase10_bank_grade applied on 2026-05-13' AS status;

@@ -45,6 +45,26 @@ const LiveReconcile: React.FC<LiveReconcileProps> = ({ customers, balances, role
   const [health, setHealth] = useState<any | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
 
+  // Phase 10: audit-chain verify state.
+  const [chainRunning, setChainRunning] = useState(false);
+  const [chainResult, setChainResult] = useState<any | null>(null);
+  const [chainError, setChainError] = useState<string | null>(null);
+
+  const runChainVerify = async () => {
+    setChainRunning(true);
+    setChainError(null);
+    setChainResult(null);
+    try {
+      const { data, error: rpcErr } = await supabase.rpc('verify_audit_chain');
+      if (rpcErr) throw rpcErr;
+      setChainResult(data);
+    } catch (err: any) {
+      setChainError(err?.message || 'Audit chain verification failed.');
+    } finally {
+      setChainRunning(false);
+    }
+  };
+
   const runHealthCheck = async () => {
     setHealthRunning(true);
     setHealthError(null);
@@ -145,6 +165,51 @@ const LiveReconcile: React.FC<LiveReconcileProps> = ({ customers, balances, role
           <p className="text-xs text-slate-500 mt-2">{totalCustomers} customers checked. No drift detected on this device.</p>
         </div>
       )}
+
+      {/* Phase 10: Audit-chain tamper probe. Walks every entry in
+          dp_audit_logs in order, recomputes the hash, and checks each
+          row's prev_hash equals the previous row's entry_hash. Any
+          edit, delete, or insertion-out-of-order is detected. */}
+      <div className="bg-white rounded-3xl border-4 border-slate-100 p-6 no-print">
+        <div className="flex items-start gap-3 mb-4">
+          <ShieldCheck className="text-indigo-600 flex-shrink-0" size={26} />
+          <div className="flex-1">
+            <h2 className="text-lg font-black uppercase tracking-tighter text-slate-900">Audit-chain tamper check</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Walks every audit log entry, recomputes its cryptographic hash, and confirms the chain is unbroken. If anyone (even an admin) ever edits a historical row, this check will fail and tell you exactly which entry was touched.
+            </p>
+          </div>
+        </div>
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={runChainVerify}
+          disabled={chainRunning}
+          className="w-full py-3 rounded-2xl bg-indigo-600 text-white font-black uppercase text-xs tracking-widest disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          {chainRunning ? <Loader2 className="animate-spin" size={16} /> : <ShieldCheck size={16} />}
+          {chainRunning ? 'Verifying…' : 'Verify audit chain'}
+        </motion.button>
+        {chainError && (
+          <p className="text-[11px] text-red-600 mt-3 font-mono break-all">{chainError}</p>
+        )}
+        {chainResult && (
+          <div className={`mt-4 rounded-xl p-4 text-xs ${chainResult.intact ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-800'}`}>
+            <p className="font-black uppercase tracking-widest mb-1">
+              {chainResult.intact
+                ? `Chain intact — ${chainResult.total_entries} entries`
+                : `Chain BROKEN — ${chainResult.breaks_detected} of ${chainResult.total_entries} entries fail`}
+            </p>
+            <p className="text-[10px] text-slate-600">
+              {chainResult.intact
+                ? 'No tampering detected. Every audit log entry is cryptographically linked to the one before it.'
+                : 'Someone or something modified the audit log directly. This should never happen — report it immediately.'}
+            </p>
+            {chainResult.first_break && (
+              <pre className="text-[9px] mt-2 bg-white p-2 rounded font-mono overflow-x-auto">{JSON.stringify(chainResult.first_break, null, 2)}</pre>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Phase 9: Financial Health Check — server-side invariants probe.
           Different from Live Reconcile (which compares this device to server).
