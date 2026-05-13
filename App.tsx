@@ -653,14 +653,15 @@ const App: React.FC = () => {
     try {
       const trimmedPin = pinInput.trim();
       
-      const { data, error } = await supabase.rpc('verify_pin', { pin: trimmedPin });
+      const { data, error } = await supabase.rpc('verify_pin', { p_pin: trimmedPin });
       if (error) throw error;
-      
+
       if (data && data.success) {
-        if (!data.token) {
+        const token = data.session_token || data.token;
+        if (!token) {
           throw new Error('Login succeeded without a server session token.');
         }
-        setAppSessionToken(data.token);
+        setAppSessionToken(token);
         const cacheMarker = await relationalDataService.getCacheMarker();
         if (localStorage.getItem(CACHE_MARKER_KEY) !== cacheMarker) {
           clearBusinessCache();
