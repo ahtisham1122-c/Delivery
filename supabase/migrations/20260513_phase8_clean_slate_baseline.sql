@@ -1,0 +1,35 @@
+-- =============================================================
+-- PHASE 8 CLEAN-SLATE BASELINE  (2026-05-13)
+-- =============================================================
+-- This file is a snapshot reference of the schema applied to the
+-- brand-new Supabase project `tmsvmyvktfatyyzqfmfv` ("Delivery").
+-- It supersedes EVERY migration before this date.
+--
+-- The actual migrations were applied via the Supabase MCP in 8 steps:
+--   m01_core_schema                  — all 20 tables + indexes + seeds
+--   m02_occ_and_period_lock          — version trigger + lock trigger + lock RPCs
+--   m03_auth_sessions_rate_limit     — sessions, hashed PINs, rate-limit,
+--                                      session-scoped RLS on every operational table
+--   m04_balances_views_and_reads     — dp_customer_balances view + read RPCs
+--   m05_atomic_write_rpcs            — save_delivery_entry / standalone_payment /
+--                                      manual_adjustment / rider_closing
+--   m06_integrity_and_daily_backup   — production_integrity_check + export_daily_backup
+--   m07_lock_down_internal_tables    — defence-in-depth RLS on internal tables
+--   m08_verify_pin_ambiguity_fix     — hotfix for column-vs-param shadowing in verify_pin
+--
+-- See `docs/PHASE8_CLEAN_SLATE.md` for the why, the setup steps, and the
+-- credentials handover. The full SQL of each step lives in the Supabase
+-- project's `supabase_migrations.schema_migrations` table.
+--
+-- This single file is here so that:
+--   1. The repo's `supabase/migrations/` directory has a reference of
+--      what's in the new DB (useful for Codex / future contributors).
+--   2. If the project ever needs to be rebuilt from scratch on another
+--      Supabase instance, applying the 8 named migrations in order
+--      reproduces it identically.
+--   3. Every previous file in `supabase/migrations/` is considered
+--      LEGACY — those ran against the OLD database; they should NOT
+--      be reapplied to the new one. The 8 numbered baselines above
+--      are the canonical schema.
+
+SELECT 'phase8_baseline applied via Supabase MCP on 2026-05-13' AS status;
