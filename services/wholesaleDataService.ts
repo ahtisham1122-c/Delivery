@@ -1,6 +1,36 @@
 import { supabase } from './supabaseClient';
 import { WSCustomer, WSProduct, WSDelivery, WSPayment, WSLedgerEntry } from '../types/wholesale';
 
+// Safe UUID generator — uses native crypto.randomUUID when available
+// (HTTPS / modern browsers), falls back to a v4 generator built on
+// crypto.getRandomValues, and finally to Math.random. Index.tsx installs
+// the same polyfill globally; this is a belt-and-braces local copy so the
+// service module is self-sufficient even if the polyfill is bypassed.
+function safeUUID(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof (crypto as any).randomUUID === 'function') {
+      return (crypto as any).randomUUID();
+    }
+  } catch { /* fall through */ }
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && typeof (crypto as any).getRandomValues === 'function') {
+    (crypto as any).getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex: string[] = [];
+  for (let i = 0; i < 256; i++) hex.push((i + 0x100).toString(16).slice(1));
+  return (
+    hex[bytes[0]] + hex[bytes[1]] + hex[bytes[2]] + hex[bytes[3]] + '-' +
+    hex[bytes[4]] + hex[bytes[5]] + '-' +
+    hex[bytes[6]] + hex[bytes[7]] + '-' +
+    hex[bytes[8]] + hex[bytes[9]] + '-' +
+    hex[bytes[10]] + hex[bytes[11]] + hex[bytes[12]] + hex[bytes[13]] + hex[bytes[14]] + hex[bytes[15]]
+  );
+}
+
 export const wholesaleDataService = {
   async fetchAllWholesaleCustomers(): Promise<WSCustomer[]> {
     try {
@@ -22,10 +52,20 @@ export const wholesaleDataService = {
   // lock, idempotency, audit logging, and version OCC. RPCs handle all
   // four invariants on the server.
   async saveWholesaleCustomer(customer: WSCustomer): Promise<WSCustomer | null> {
-    const { data, error } = await supabase.rpc('save_ws_customer', { p_customer: customer });
+    // Strip empty id so the DB generates one (avoids client-side UUID dependency).
+    const payload: any = { ...customer };
+    if (!payload.id || payload.id === '__new__') delete payload.id;
+
+    const { data, error } = await supabase.rpc('save_ws_customer', { p_customer: payload });
     if (error) {
       console.error('Error saving wholesale customer to cloud:', error);
       throw new Error(error.message || 'Failed to save customer');
+    }
+    // RPC now returns { success, customer } on OK or { success:false, error_stage, error } on fail.
+    if (data && (data as any).success === false) {
+      const stage = (data as any).error_stage || 'unknown';
+      const msg = (data as any).error || 'Unknown error';
+      throw new Error(`[${stage}] ${msg}`);
     }
     return (data as any)?.customer || null;
   },
@@ -52,7 +92,7 @@ export const wholesaleDataService = {
       const { total_amount, ...rest } = entry as any;
       return {
         ...rest,
-        client_request_id: rest.client_request_id || rest.id || crypto.randomUUID(),
+        client_request_id: rest.client_request_id || rest.id || safeUUID(),
       };
     });
     const { data, error } = await supabase.rpc('save_ws_delivery_batch', { p_entries: payload });
@@ -66,7 +106,7 @@ export const wholesaleDataService = {
   async savePayment(payment: WSPayment): Promise<WSPayment | null> {
     const payload = {
       ...payment,
-      client_request_id: payment.client_request_id || payment.id || crypto.randomUUID(),
+      client_request_id: payment.client_request_id || payment.id || safeUUID(),
     };
     const { data, error } = await supabase.rpc('save_ws_payment', { p_payment: payload });
     if (error) {

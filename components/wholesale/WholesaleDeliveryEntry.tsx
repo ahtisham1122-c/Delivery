@@ -79,14 +79,14 @@ const WholesaleDeliveryEntry: React.FC = () => {
     setSyncStatus('saving');
     
     const entries: WSDelivery[] = rows.map(r => ({
-      id: crypto.randomUUID(),
+      // DB generates the id via gen_random_uuid().
       customer_id: customerId,
       date,
       product_id: r.productId,
       quantity: r.qty,
       rate: r.rate,
       total_amount: r.qty * r.rate
-    }));
+    }) as WSDelivery);
 
     let saved: WSDelivery[] | null = null;
     try {

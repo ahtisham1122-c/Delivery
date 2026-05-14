@@ -35,10 +35,11 @@ const WholesaleCustomerManager: React.FC = () => {
   };
 
   const handleAddNew = () => {
-    const newId = crypto.randomUUID();
-    setEditingId(newId);
+    // No client-side UUID — the database generates the id via gen_random_uuid()
+    // inside save_ws_customer(). This keeps the form working on HTTP / older
+    // browsers where crypto.randomUUID() is undefined.
+    setEditingId('__new__');
     setFormData({
-      id: newId,
       name: '',
       contact_person: '',
       phone: '',

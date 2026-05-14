@@ -44,13 +44,13 @@ const WholesalePaymentEntry: React.FC = () => {
     setSyncStatus('saving');
     
     const payment: WSPayment = {
-      id: crypto.randomUUID(),
+      // No client id — DB issues one. client_request_id added by the service.
       customer_id: customerId,
       date,
       amount: Number(amount),
       mode,
       note
-    };
+    } as WSPayment;
 
     try {
       const saved = await wholesaleDataService.savePayment(payment);
