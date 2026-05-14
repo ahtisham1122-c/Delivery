@@ -33,16 +33,36 @@ function safeUUID(): string {
 
 export const wholesaleDataService = {
   async fetchAllWholesaleCustomers(): Promise<WSCustomer[]> {
+    // Phase 11 (2026-05-14): switched from a direct SELECT (subject to RLS
+    // and header-flow oddities) to a SECURITY DEFINER RPC that does its
+    // own OWNER check internally. Single source of truth, can't be silently
+    // blocked by RLS. Returns { success, customers } or { success:false, error }.
     try {
-      const { data, error } = await supabase
-        .from('ws_wholesale_customers')
-        .select('*')
-        .eq('deleted', false)
-        .order('name');
-      if (error) throw error;
-      return data || [];
+      const { data, error } = await supabase.rpc('list_ws_customers', { p_include_inactive: true });
+      if (error) {
+        console.error('[wholesale] list_ws_customers RPC error:', error);
+        // Fall back to the legacy SELECT for older databases that don't have the RPC.
+        const fallback = await supabase
+          .from('ws_wholesale_customers')
+          .select('*')
+          .eq('deleted', false)
+          .order('name');
+        if (fallback.error) {
+          console.error('[wholesale] fallback SELECT also failed:', fallback.error);
+          return [];
+        }
+        console.log('[wholesale] fallback SELECT returned', fallback.data?.length || 0, 'rows');
+        return fallback.data || [];
+      }
+      if (data && (data as any).success === false) {
+        console.error('[wholesale] list_ws_customers refused:', (data as any).error);
+        return [];
+      }
+      const rows = ((data as any)?.customers as WSCustomer[]) || [];
+      console.log('[wholesale] list_ws_customers returned', rows.length, 'customers');
+      return rows;
     } catch (err) {
-      console.error('Error fetching wholesale customers:', err);
+      console.error('[wholesale] fetchAllWholesaleCustomers crashed:', err);
       return [];
     }
   },
