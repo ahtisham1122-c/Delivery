@@ -91,16 +91,34 @@ export const wholesaleDataService = {
   },
 
   async fetchAllProducts(): Promise<WSProduct[]> {
+    // Same RPC pattern as list_ws_customers — bypass RLS with a SECURITY
+    // DEFINER call so empty-list bugs caused by header/cache oddities can't
+    // happen. Falls back to direct SELECT for older databases.
     try {
-      const { data, error } = await supabase
-        .from('ws_products')
-        .select('*')
-        .eq('deleted', false)
-        .order('name');
-      if (error) throw error;
-      return data || [];
+      const { data, error } = await supabase.rpc('list_ws_products', { p_include_inactive: true });
+      if (error) {
+        console.error('[wholesale] list_ws_products RPC error:', error);
+        const fallback = await supabase
+          .from('ws_products')
+          .select('*')
+          .eq('deleted', false)
+          .order('name');
+        if (fallback.error) {
+          console.error('[wholesale] fallback SELECT also failed:', fallback.error);
+          return [];
+        }
+        console.log('[wholesale] fallback products SELECT returned', fallback.data?.length || 0, 'rows');
+        return fallback.data || [];
+      }
+      if (data && (data as any).success === false) {
+        console.error('[wholesale] list_ws_products refused:', (data as any).error);
+        return [];
+      }
+      const rows = ((data as any)?.products as WSProduct[]) || [];
+      console.log('[wholesale] list_ws_products returned', rows.length, 'products');
+      return rows;
     } catch (err) {
-      console.error('Error fetching wholesale products:', err);
+      console.error('[wholesale] fetchAllProducts crashed:', err);
       return [];
     }
   },
