@@ -236,7 +236,7 @@ const WholesaleCustomerManager: React.FC = () => {
                     <div className="text-xs text-slate-500">{customer.phone || '-'}</div>
                   </td>
                   <td className="p-4 text-sm text-slate-600">{customer.payment_cycle || '-'}</td>
-                  <td className="p-4 text-right font-bold text-slate-700">Rs. {customer.opening_balance.toLocaleString()}</td>
+                  <td className="p-4 text-right font-bold text-slate-700">Rs. {Number(customer.opening_balance ?? 0).toLocaleString()}</td>
                   <td className="p-4 text-center">
                     <button 
                       onClick={() => handleToggleActive(customer)}

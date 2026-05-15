@@ -132,7 +132,7 @@ const WholesalePaymentEntry: React.FC = () => {
             </select>
             {customerBalance !== null && (
               <p className="text-sm mt-2 font-medium text-slate-600">
-                Current Balance: <span className={customerBalance > 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold'}>Rs. {customerBalance.toLocaleString()}</span>
+                Current Balance: <span className={customerBalance > 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold'}>Rs. {Number(customerBalance ?? 0).toLocaleString()}</span>
               </p>
             )}
           </div>

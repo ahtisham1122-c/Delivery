@@ -296,7 +296,7 @@ const WholesaleLedger: React.FC = () => {
               <td class="bold">Opening Balance</td>
               <td class="right"></td>
               <td class="right"></td>
-              <td class="right bold">${customer.opening_balance.toLocaleString()}</td>
+              <td class="right bold">${Number(customer?.opening_balance ?? 0).toLocaleString()}</td>
             </tr>
             ${ledgerWithBalance.map(e => `
               <tr>
@@ -304,9 +304,9 @@ const WholesaleLedger: React.FC = () => {
                 <td>
                   ${e.type === 'delivery' ? `Delivery: ${e.product_name} (${e.quantity} @ ${e.rate})` : `Payment Received ${e.note ? `(${e.note})` : ''}`}
                 </td>
-                <td class="right debit">${e.type === 'delivery' ? e.amount.toLocaleString() : ''}</td>
-                <td class="right credit">${e.type === 'payment' ? e.amount.toLocaleString() : ''}</td>
-                <td class="right bold">${e.runningBalance.toLocaleString()}</td>
+                <td class="right debit">${e.type === 'delivery' ? Number(e.amount ?? 0).toLocaleString() : ''}</td>
+                <td class="right credit">${e.type === 'payment' ? Number(e.amount ?? 0).toLocaleString() : ''}</td>
+                <td class="right bold">${Number(e.runningBalance ?? 0).toLocaleString()}</td>
               </tr>
             `).join('')}
           </tbody>
@@ -315,19 +315,19 @@ const WholesaleLedger: React.FC = () => {
         <div class="summary">
           <div class="summary-row">
             <span>Opening Balance:</span>
-            <span>Rs. ${customer.opening_balance.toLocaleString()}</span>
+            <span>Rs. ${Number(customer?.opening_balance ?? 0).toLocaleString()}</span>
           </div>
           <div class="summary-row">
             <span>Total Deliveries (Debit):</span>
-            <span class="debit">Rs. ${filteredLedger.filter(e => e.type === 'delivery').reduce((s, e) => s + e.amount, 0).toLocaleString()}</span>
+            <span class="debit">Rs. ${Number(filteredLedger.filter(e => e.type === 'delivery').reduce((s, e) => s + (Number(e.amount) || 0), 0)).toLocaleString()}</span>
           </div>
           <div class="summary-row">
             <span>Total Payments (Credit):</span>
-            <span class="credit">Rs. ${filteredLedger.filter(e => e.type === 'payment').reduce((s, e) => s + e.amount, 0).toLocaleString()}</span>
+            <span class="credit">Rs. ${Number(filteredLedger.filter(e => e.type === 'payment').reduce((s, e) => s + (Number(e.amount) || 0), 0)).toLocaleString()}</span>
           </div>
           <div class="summary-row total">
             <span>Closing Balance:</span>
-            <span>Rs. ${(ledgerWithBalance.length > 0 ? ledgerWithBalance[ledgerWithBalance.length - 1].runningBalance : customer.opening_balance).toLocaleString()}</span>
+            <span>Rs. ${Number((ledgerWithBalance.length > 0 ? ledgerWithBalance[ledgerWithBalance.length - 1].runningBalance : customer?.opening_balance) ?? 0).toLocaleString()}</span>
           </div>
         </div>
         
@@ -439,7 +439,7 @@ const WholesaleLedger: React.FC = () => {
                     <td className="p-3 text-right"></td>
                     <td className="p-3 text-right"></td>
                     <td className="p-3 text-right font-black text-slate-800">
-                      {customers.find(c => c.id === customerId)?.opening_balance.toLocaleString()}
+                      {Number(customers.find(c => c.id === customerId)?.opening_balance ?? 0).toLocaleString()}
                     </td>
                     <td className="p-3"></td>
                   </tr>
@@ -466,14 +466,14 @@ const WholesaleLedger: React.FC = () => {
                       )}
                     </td>
                     <td className="p-3 text-sm font-bold text-red-600 text-right">
-                      {entry.type === 'delivery' ? entry.amount.toLocaleString() : '-'}
+                      {entry.type === 'delivery' ? Number(entry.amount ?? 0).toLocaleString() : '-'}
                     </td>
                     <td className="p-3 text-sm font-bold text-emerald-600 text-right">
-                      {entry.type === 'payment' ? entry.amount.toLocaleString() : '-'}
+                      {entry.type === 'payment' ? Number(entry.amount ?? 0).toLocaleString() : '-'}
                     </td>
                     {customerId && (
                       <td className={`p-3 text-sm font-black text-right ${'runningBalance' in entry && (entry.runningBalance as number) > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
-                        {'runningBalance' in entry ? (entry.runningBalance as number).toLocaleString() : ''}
+                        {'runningBalance' in entry ? Number((entry as any).runningBalance ?? 0).toLocaleString() : ''}
                       </td>
                     )}
                     <td className="p-3 text-center">

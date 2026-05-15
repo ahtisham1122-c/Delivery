@@ -181,7 +181,7 @@ const WholesaleDeliveryEntry: React.FC = () => {
             </select>
             {customerBalance !== null && (
               <p className="text-sm mt-2 font-medium text-slate-600">
-                Current Balance: <span className={customerBalance > 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold'}>Rs. {customerBalance.toLocaleString()}</span>
+                Current Balance: <span className={customerBalance > 0 ? 'text-red-600 font-bold' : 'text-emerald-600 font-bold'}>Rs. {Number(customerBalance ?? 0).toLocaleString()}</span>
               </p>
             )}
           </div>
@@ -233,7 +233,7 @@ const WholesaleDeliveryEntry: React.FC = () => {
                     />
                   </td>
                   <td className="p-3 text-right font-bold text-slate-700">
-                    {(row.qty * row.rate).toLocaleString()}
+                    {Number((row.qty || 0) * (row.rate || 0)).toLocaleString()}
                   </td>
                   <td className="p-3 text-center">
                     <button
@@ -256,7 +256,7 @@ const WholesaleDeliveryEntry: React.FC = () => {
               <Plus size={16} /> Add Product
             </button>
             <div className="text-lg font-black text-slate-800">
-              Grand Total: Rs. {calculateTotal().toLocaleString()}
+              Grand Total: Rs. {Number(calculateTotal() || 0).toLocaleString()}
             </div>
           </div>
         </div>

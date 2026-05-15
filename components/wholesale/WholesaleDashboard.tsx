@@ -66,7 +66,7 @@ const WholesaleDashboard: React.FC<WholesaleDashboardProps> = ({ onNavigate }) =
           </div>
           <div>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Outstanding</p>
-            <p className="text-2xl font-black text-slate-800">Rs. {summary.totalOutstanding.toLocaleString()}</p>
+            <p className="text-2xl font-black text-slate-800">Rs. {Number(summary?.totalOutstanding ?? 0).toLocaleString()}</p>
           </div>
         </div>
 
@@ -76,7 +76,7 @@ const WholesaleDashboard: React.FC<WholesaleDashboardProps> = ({ onNavigate }) =
           </div>
           <div>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Today's Milk</p>
-            <p className="text-2xl font-black text-slate-800">{summary.todayMilkLiters} L</p>
+            <p className="text-2xl font-black text-slate-800">{Number(summary?.todayMilkLiters ?? 0)} L</p>
           </div>
         </div>
 
@@ -86,7 +86,7 @@ const WholesaleDashboard: React.FC<WholesaleDashboardProps> = ({ onNavigate }) =
           </div>
           <div>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Today's Yogurt</p>
-            <p className="text-2xl font-black text-slate-800">{summary.todayYogurtKg} Kg</p>
+            <p className="text-2xl font-black text-slate-800">{Number(summary?.todayYogurtKg ?? 0)} Kg</p>
           </div>
         </div>
 
@@ -96,7 +96,7 @@ const WholesaleDashboard: React.FC<WholesaleDashboardProps> = ({ onNavigate }) =
           </div>
           <div>
             <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Today's Cash</p>
-            <p className="text-2xl font-black text-slate-800">Rs. {summary.todayCash.toLocaleString()}</p>
+            <p className="text-2xl font-black text-slate-800">Rs. {Number(summary?.todayCash ?? 0).toLocaleString()}</p>
           </div>
         </div>
       </div>
@@ -107,14 +107,14 @@ const WholesaleDashboard: React.FC<WholesaleDashboardProps> = ({ onNavigate }) =
             <Users size={20} className="text-blue-600" />
             Top Outstanding Balances
           </h2>
-          {summary.topCustomers.length === 0 ? (
+          {(summary?.topCustomers || []).length === 0 ? (
             <p className="text-slate-500 text-sm py-4">No outstanding balances found.</p>
           ) : (
             <div className="space-y-3">
-              {summary.topCustomers.map((c, i) => (
+              {(summary?.topCustomers || []).map((c, i) => (
                 <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                  <span className="font-bold text-slate-700">{c.name}</span>
-                  <span className="font-black text-red-600">Rs. {c.balance.toLocaleString()}</span>
+                  <span className="font-bold text-slate-700">{c?.name || ''}</span>
+                  <span className="font-black text-red-600">Rs. {Number(c?.balance ?? 0).toLocaleString()}</span>
                 </div>
               ))}
             </div>
