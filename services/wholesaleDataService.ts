@@ -191,99 +191,47 @@ export const wholesaleDataService = {
 
   async fetchLedger(customerId?: string, fromDate?: string, toDate?: string): Promise<WSLedgerEntry[]> {
     try {
-      let delQuery = supabase.from('ws_deliveries').select('*, ws_products(name)').eq('deleted', false);
-      let payQuery = supabase.from('ws_payments').select('*').eq('deleted', false);
-
-      if (customerId) {
-        delQuery = delQuery.eq('customer_id', customerId);
-        payQuery = payQuery.eq('customer_id', customerId);
-      }
-      if (fromDate) {
-        delQuery = delQuery.gte('date', fromDate);
-        payQuery = payQuery.gte('date', fromDate);
-      }
-      if (toDate) {
-        delQuery = delQuery.lte('date', toDate);
-        payQuery = payQuery.lte('date', toDate);
-      }
-
-      const [delRes, payRes] = await Promise.all([delQuery, payQuery]);
-      
-      if (delRes.error) throw delRes.error;
-      if (payRes.error) throw payRes.error;
-
-      const ledger: WSLedgerEntry[] = [];
-
-      (delRes.data || []).forEach((d: any) => {
-        ledger.push({
-          id: d.id,
-          date: d.date,
-          customer_id: d.customer_id,
-          type: 'delivery',
-          product_id: d.product_id,
-          product_name: d.ws_products?.name || 'Unknown Product',
-          quantity: d.quantity,
-          rate: d.rate,
-          amount: d.total_amount || (d.quantity * d.rate),
-          note: d.note,
-          is_adjustment: d.is_adjustment,
-          adjustment_note: d.adjustment_note,
-          created_at: d.created_at
-        });
+      const { data, error } = await supabase.rpc('list_ws_ledger', {
+        p_customer_id: customerId || null,
+        p_from_date: fromDate || null,
+        p_to_date: toDate || null,
       });
-
-      (payRes.data || []).forEach((p: any) => {
-        ledger.push({
-          id: p.id,
-          date: p.date,
-          customer_id: p.customer_id,
-          type: 'payment',
-          amount: p.amount,
-          note: p.note,
-          created_at: p.created_at
-        });
-      });
-
-      return ledger.sort((a, b) => a.date.localeCompare(b.date) || a.created_at.localeCompare(b.created_at));
+      if (error) {
+        console.error('[wholesale] list_ws_ledger error:', error);
+        return [];
+      }
+      if ((data as any)?.success === false) {
+        console.error('[wholesale] list_ws_ledger refused:', (data as any).error);
+        return [];
+      }
+      const dels = ((data as any)?.deliveries as any[]) || [];
+      const pays = ((data as any)?.payments as any[]) || [];
+      const ledger: WSLedgerEntry[] = [...dels, ...pays];
+      console.log(`[wholesale] list_ws_ledger returned ${dels.length} deliveries + ${pays.length} payments`);
+      return ledger.sort((a, b) =>
+        (a.date || '').localeCompare(b.date || '') ||
+        (a.created_at || '').localeCompare(b.created_at || '')
+      );
     } catch (err) {
-      console.error('Error fetching wholesale ledger:', err);
+      console.error('[wholesale] fetchLedger crashed:', err);
       return [];
     }
   },
 
   async getCustomerBalance(customerId: string): Promise<number> {
     try {
-      const { data: customer, error: custErr } = await supabase
-        .from('ws_wholesale_customers')
-        .select('opening_balance')
-        .eq('id', customerId)
-        .eq('deleted', false)
-        .single();
-      
-      if (custErr) throw custErr;
-
-      const { data: deliveries, error: delErr } = await supabase
-        .from('ws_deliveries')
-        .select('total_amount, quantity, rate')
-        .eq('customer_id', customerId)
-        .eq('deleted', false);
-      
-      if (delErr) throw delErr;
-
-      const { data: payments, error: payErr } = await supabase
-        .from('ws_payments')
-        .select('amount')
-        .eq('customer_id', customerId)
-        .eq('deleted', false);
-      
-      if (payErr) throw payErr;
-
-      const totalDelivered = (deliveries || []).reduce((sum, d) => sum + (d.total_amount || (d.quantity * d.rate)), 0);
-      const totalPaid = (payments || []).reduce((sum, p) => sum + p.amount, 0);
-
-      return (customer?.opening_balance || 0) + totalDelivered - totalPaid;
+      const { data, error } = await supabase.rpc('get_ws_customer_balance', { p_customer_id: customerId });
+      if (error) {
+        console.error('[wholesale] get_ws_customer_balance error:', error);
+        return 0;
+      }
+      if ((data as any)?.success === false) {
+        console.error('[wholesale] get_ws_customer_balance refused:', (data as any).error);
+        return 0;
+      }
+      return Number((data as any)?.balance || 0);
     } catch (err) {
-      console.error('Error getting customer balance:', err);
+      console.error('[wholesale] getCustomerBalance crashed:', err);
       return 0;
     }
   },
@@ -295,55 +243,27 @@ export const wholesaleDataService = {
     todayCash: number,
     topCustomers: { name: string, balance: number }[]
   }> {
+    const empty = { totalOutstanding: 0, todayMilkLiters: 0, todayYogurtKg: 0, todayCash: 0, topCustomers: [] };
     try {
-      const today = new Date().toISOString().split('T')[0];
-      
-      const { data: customers } = await supabase.from('ws_wholesale_customers').select('*').eq('active', true).eq('deleted', false);
-      const { data: deliveries } = await supabase.from('ws_deliveries').select('*, ws_products(name)').eq('deleted', false);
-      const { data: payments } = await supabase.from('ws_payments').select('*').eq('deleted', false);
-
-      const balances = new Map<string, number>();
-      let totalOutstanding = 0;
-
-      (customers || []).forEach(c => {
-        const cDels = (deliveries || []).filter(d => d.customer_id === c.id);
-        const cPays = (payments || []).filter(p => p.customer_id === c.id);
-        
-        const totalDel = cDels.reduce((sum, d) => sum + (d.total_amount || (d.quantity * d.rate)), 0);
-        const totalPay = cPays.reduce((sum, p) => sum + p.amount, 0);
-        const bal = (c.opening_balance || 0) + totalDel - totalPay;
-        
-        balances.set(c.id, bal);
-        totalOutstanding += bal;
-      });
-
-      const topCustomers = (customers || [])
-        .map(c => ({ name: c.name, balance: balances.get(c.id) || 0 }))
-        .sort((a, b) => b.balance - a.balance)
-        .slice(0, 5);
-
-      const todayDeliveries = (deliveries || []).filter(d => d.date === today);
-      const todayMilkLiters = todayDeliveries
-        .filter(d => d.ws_products?.name?.toLowerCase().includes('milk'))
-        .reduce((sum, d) => sum + d.quantity, 0);
-      const todayYogurtKg = todayDeliveries
-        .filter(d => d.ws_products?.name?.toLowerCase().includes('yogurt'))
-        .reduce((sum, d) => sum + d.quantity, 0);
-
-      const todayCash = (payments || [])
-        .filter(p => p.date === today)
-        .reduce((sum, p) => sum + p.amount, 0);
-
+      const { data, error } = await supabase.rpc('ws_dashboard_summary');
+      if (error) {
+        console.error('[wholesale] ws_dashboard_summary error:', error);
+        return empty;
+      }
+      if ((data as any)?.success === false) {
+        console.error('[wholesale] ws_dashboard_summary refused:', (data as any).error);
+        return empty;
+      }
       return {
-        totalOutstanding,
-        todayMilkLiters,
-        todayYogurtKg,
-        todayCash,
-        topCustomers
+        totalOutstanding: Number((data as any)?.totalOutstanding || 0),
+        todayMilkLiters: Number((data as any)?.todayMilkLiters || 0),
+        todayYogurtKg: Number((data as any)?.todayYogurtKg || 0),
+        todayCash: Number((data as any)?.todayCash || 0),
+        topCustomers: ((data as any)?.topCustomers as any[]) || [],
       };
     } catch (err) {
-      console.error('Error fetching dashboard summary:', err);
-      return { totalOutstanding: 0, todayMilkLiters: 0, todayYogurtKg: 0, todayCash: 0, topCustomers: [] };
+      console.error('[wholesale] fetchDashboardSummary crashed:', err);
+      return empty;
     }
   },
 
